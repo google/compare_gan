@@ -1,0 +1,19 @@
+syntax = "proto2";
+
+package compare_gan;
+
+
+message TaskDimension {
+  optional string parameter = 1;
+  optional string string_value = 2;
+  optional int32 int_value = 3;
+  optional float float_value = 4;
+  optional bool bool_value = 5;
+}
+
+message Task {
+  optional int32 num = 1;
+
+  // A list of specifications of the relevant parameters used for this task.
+  repeated TaskDimension dimensions = 7;
+}
