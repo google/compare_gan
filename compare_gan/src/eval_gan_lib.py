@@ -60,12 +60,13 @@ DEFAULT_VALUES = {
 # Inception batch size.
 INCEPTION_BATCH = 50
 
+# List of models that we consider.
+SUPPORTED_GANS = ["GAN", "GAN_MINMAX", "WGAN", "WGAN_GP",
+                  "DRAGAN", "LSGAN", "VAE", "BEGAN"]
 
 def GetAllTrainingParams():
   all_params = set()
-  supported_gans = ["GAN", "GAN_MINMAX", "WGAN", "WGAN_GP",
-                    "DRAGAN", "LSGAN", "VAE", "BEGAN"]
-  for gan_type in supported_gans:
+  for gan_type in SUPPORTED_GANS:
     for dataset in ["mnist", "fashion-mnist", "cifar10", "celeba"]:
       p = params.GetParameters(gan_type, dataset, "wide")
       all_params.update(p.keys())
@@ -120,10 +121,7 @@ def RunCheckpointEval(checkpoint_path, task_workdir, options, inception_graph):
   gan_log_dir = os.path.join(task_workdir, "logs")
 
   gan_type = options["gan_type"]
-
-  supported_gans = ["GAN", "GAN_MINMAX", "WGAN", "WGAN_GP",
-                    "DRAGAN", "LSGAN", "VAE", "BEGAN"]
-  if gan_type not in supported_gans:
+  if gan_type not in SUPPORTED_GANS:
     raise ValueError("Gan type %s is not supported." % gan_type)
   dataset = options["dataset"]
 
@@ -177,7 +175,7 @@ def RunCheckpointEval(checkpoint_path, task_workdir, options, inception_graph):
       # Make sure we have >= examples as in the test set.
       num_batches = int(np.ceil(num_test_examples / gan.batch_size))
       for _ in range(num_batches):
-        z_sample = np.random.uniform(-1, 1, size=(gan.batch_size, gan.z_dim))
+        z_sample = gan.z_generator(gan.batch_size, gan.z_dim)
         feed_dict = {gan.z: z_sample}
         x = sess.run(gan.fake_images, feed_dict=feed_dict)
         # If NaNs were generated, ignore this checkpoint and assign a very high
