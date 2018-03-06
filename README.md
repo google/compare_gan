@@ -1,6 +1,6 @@
 ## Compare GAN code.
 
-This is the code that was used in "Are GANs Created Equal? A Large Scale Study"
+This is the code that was used in "Are GANs Created Equal? A Large-Scale Study"
 paper (https://arxiv.org/abs/1711.10337).
 
 ### Installation:
