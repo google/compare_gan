@@ -23,32 +23,31 @@ import tensorflow as tf
 class WGAN(AbstractGAN):
   """Wasserstein GAN."""
 
-  def __init__(self, sess, dataset_content, dataset_parameters,
-               training_parameters, checkpoint_dir, result_dir, log_dir):
+  def __init__(self, dataset_content, parameters, runtime_info):
     super(WGAN, self).__init__(
         model_name="WGAN",
-        sess=sess,
         dataset_content=dataset_content,
-        dataset_parameters=dataset_parameters,
-        training_parameters=training_parameters,
-        checkpoint_dir=checkpoint_dir,
-        result_dir=result_dir,
-        log_dir=log_dir)
+        parameters=parameters,
+        runtime_info=runtime_info)
 
     # Number of discriminator iterations per one iteration of the generator.
-    self.disc_iters = training_parameters["disc_iters"]
-    self.clip = training_parameters["weight_clipping"]
+    self.disc_iters = parameters["disc_iters"]
+    self.clip = parameters["weight_clipping"]
     # If the optimizer wasn't specified, use Adam to be consistent with
     # other GANs.
-    self.optimizer = training_parameters.get("optimizer", "adam")
+    self.optimizer = parameters.get("optimizer", "adam")
 
-  def get_optimizer(self):
+  def get_optimizer(self, name_prefix):
     if self.optimizer == "adam":
       print "Using Adam optimizer."
-      return tf.train.AdamOptimizer(self.learning_rate, beta1=self.beta1)
+      return tf.train.AdamOptimizer(
+          self.learning_rate,
+          beta1=self.beta1,
+          name=name_prefix + self.optimizer)
     elif self.optimizer == "rmsprop":
       print "Using RMSProp optimizer."
-      return tf.train.RMSPropOptimizer(self.learning_rate)
+      return tf.train.RMSPropOptimizer(
+          self.learning_rate, name=name_prefix + self.optimizer)
     else:
       raise ValueError("Unknown optimizer: %s" % self.optimizer)
 
@@ -82,13 +81,14 @@ class WGAN(AbstractGAN):
 
     # Divide trainable variables into a group for D and group for G.
     t_vars = tf.trainable_variables()
-    d_vars = [var for var in t_vars if "d_" in var.name]
-    g_vars = [var for var in t_vars if "g_" in var.name]
+    d_vars = [var for var in t_vars if "discriminator" in var.name]
+    g_vars = [var for var in t_vars if "generator" in var.name]
+    self.check_variables(t_vars, d_vars, g_vars)
 
     # Define optimization ops.
     with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-      self.d_optim = self.get_optimizer().minimize(self.d_loss, var_list=d_vars)
-      self.g_optim = self.get_optimizer().minimize(self.g_loss, var_list=g_vars)
+      self.d_optim = self.get_optimizer("d_").minimize(self.d_loss, var_list=d_vars)
+      self.g_optim = self.get_optimizer("g_").minimize(self.g_loss, var_list=g_vars)
 
     # Weight clipping.
     self.clip_D = [

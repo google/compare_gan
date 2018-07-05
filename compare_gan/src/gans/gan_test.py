@@ -19,10 +19,13 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import collections
+
+from compare_gan.src.gans import consts
+from compare_gan.src.gans import GAN, WGAN, WGAN_GP, DRAGAN, LSGAN, BEGAN, VAE
+
 import numpy as np
 import tensorflow as tf
-
-from compare_gan.src.gans import GAN, WGAN, WGAN_GP, DRAGAN, LSGAN, BEGAN, VAE
 
 MODELS = {
     "GAN": GAN.GAN,
@@ -41,15 +44,15 @@ class GANTest(tf.test.TestCase):
     features = np.random.randn(100, 2)
     labels = np.zeros(100)
     dataset_content = tf.data.Dataset.from_tensor_slices((features, labels))
-    dataset_params = {
+    params = {
+        # dataset params
         "input_height": 28,
         "input_width": 28,
         "output_height": 28,
         "output_width": 28,
         "c_dim": 1,
-        "dataset_name": "mnist_fake"
-    }
-    training_params = {
+        "dataset_name": "mnist_fake",
+        # training params
         "learning_rate": 0.0002,
         "beta1": 0.5,
         "z_dim": 62,
@@ -63,25 +66,25 @@ class GANTest(tf.test.TestCase):
         "len_discrete_code": 10,
         "len_continuous_code": 2,
         "SUPERVISED": True,
-        "discriminator_batchnorm": False,
-        "weight_clipping": -1.0
+        "discriminator_normalization": consts.NO_NORMALIZATION,
+        "weight_clipping": -1.0,
+        "save_checkpoint_steps": 5000
     }
 
     config = tf.ConfigProto(allow_soft_placement=True)
     for gan_type in MODELS:
       tf.reset_default_graph()
-      with tf.Session(config=config) as sess:
-        kwargs = dict(
-            sess=sess,
-            checkpoint_dir=None,
-            result_dir=None,
-            log_dir=None,
-            dataset_content=dataset_content,
-            dataset_parameters=dataset_params,
-            training_parameters=training_params)
-        gan = MODELS[gan_type](**kwargs)
-        gan.build_model()
-        self.assertEqual(gan.fake_images.get_shape(), [32, 28, 28, 1])
+
+      runtime_info = collections.namedtuple(
+          'RuntimeInfo', ['checkpoint_dir', 'result_dir', 'log_dir'])
+
+      kwargs = dict(
+          runtime_info=runtime_info,
+          dataset_content=dataset_content,
+          parameters=params)
+      gan = MODELS[gan_type](**kwargs)
+      gan.build_model()
+      self.assertEqual(gan.fake_images.get_shape(), [32, 28, 28, 1])
 
 
 if __name__ == "__main__":

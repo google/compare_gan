@@ -39,12 +39,13 @@ setup(
     install_requires=[
         'future',
         'numpy',
+        'protobuf',
+        'tensor2tensor',
     ],
     extras_require={
         'pillow': ['pillow>=5.0.0'],
-        'protobuf': ['protobuf>=3.5.0'],
-        'tensor2tensor': ['tensor2tensor>=1.3.2'],
-        'tensorflow': ['tensorflow>=1.4.1'],
+        'pandas': ['pandas>=0.23.0'],
+        'tensorflow': ['tensorflow>=1.7'],
         'tensorflow_gpu': ['tensorflow-gpu>=1.4.1'],
     },
     classifiers=[

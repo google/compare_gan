@@ -44,7 +44,7 @@ class GanLibTest(tf.test.TestCase):
         self.assertEqual(label.shape, ())
     with tf.Graph().as_default():
       iterator = gan_lib.load_dataset(
-          "triangles", split_name="validation").make_one_shot_iterator(
+          "triangles", split_name="val").make_one_shot_iterator(
               ).get_next()
       with tf.Session() as sess:
         image, label = sess.run(iterator)
@@ -59,6 +59,7 @@ class GanLibTest(tf.test.TestCase):
         image, label = sess.run(iterator)
         self.assertEqual(image.shape, (28, 28, 1))
         self.assertEqual(label.shape, ())
+
 
 if __name__ == "__main__":
   tf.test.main()

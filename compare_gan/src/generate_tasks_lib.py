@@ -28,6 +28,7 @@ import random
 from compare_gan.src import params
 from compare_gan.src import simple_task_pb2
 from compare_gan.src import task_utils
+from compare_gan.src.gans import consts
 import tensorflow as tf
 from google.protobuf import text_format
 
@@ -41,50 +42,103 @@ ALL_GANS = [
     "GAN", "GAN_MINMAX", "WGAN", "WGAN_GP",
     "DRAGAN", "VAE", "LSGAN", "BEGAN"]
 
-flags.DEFINE_string(
-    "phase1_dir", "/tmp/phase1/",
-    "This flag has to be set only if you are running phase3 experiments. "
-    "It is a path to the directory with phase1 results, that will be used by "
-    "phase3 to automatically extract the best hyperparameters for given model.")
+
+def CreateCrossProductAndAddDefaultParams(config):
+  tasks = task_utils.CrossProduct(config)
+  # Add GAN and dataset specific hyperparams.
+  for task in tasks:
+    defaults = GetDefaultParams(
+        params.GetParameters(task["gan_type"], "wide"))
+    defaults.update(task)
+    task.update(defaults)
+  return tasks
 
 
 def TestExp():
   """Run for one epoch over all tested GANs."""
   config = {
       "gan_type": ["GAN", "GAN_MINMAX", "WGAN", "WGAN_GP",
-                   "DRAGAN", "VAE", "LSGAN", "BEGAN"],
-      "dataset": ["mnist"],
-      "training_steps": [60000 // BATCH_SIZE],
+                   "DRAGAN", "VAE", "LSGAN", "BEGAN",
+                   "GAN_PENALTY", "WGAN_PENALTY"],
+      "dataset": ["fake"],
+      "architecture": [consts.INFOGAN_ARCH],
+      "training_steps": [100],
+      # Don't save any checkpoints during the training
+      # (one is always saved at the end).
       "save_checkpoint_steps": [10000],
       "batch_size": [BATCH_SIZE],
       "tf_seed": [42],
       "z_dim": [64],
+      # For test reasons - use a small sample.
+      "eval_test_samples": [50],
   }
-  tasks = task_utils.CrossProduct(config)
-  # Add GAN and dataset specific hyperparams.
-  for task in tasks:
-    task.update(GetDefaultParams(
-        params.GetParameters(task["gan_type"], task["dataset"])))
-  return tasks
+  return CreateCrossProductAndAddDefaultParams(config)
 
 
-def RepeatExp(gan_type, num_repeat):
-  """Experiment where 1 fixed gan is trained with num_repeat seeds."""
+def TestGansWithPenalty():
+  """Run for one epoch over all tested GANs."""
   config = {
-      "gan_type": [gan_type],
-      "dataset": ["mnist", "fashion-mnist"],
-      "training_steps": [20 * 60000 // BATCH_SIZE],
-      "save_checkpoint_steps": [5 * 60000 // BATCH_SIZE],
+      "gan_type": ["GAN_PENALTY", "WGAN_PENALTY"],
+      "penalty_type": [consts.NO_PENALTY, consts.WGANGP_PENALTY],
+      "dataset": ["mnist"],
+      "training_steps": [60000 // BATCH_SIZE],
+      "save_checkpoint_steps": [10000],
+      "architecture": [consts.INFOGAN_ARCH],
       "batch_size": [BATCH_SIZE],
+      "tf_seed": [42],
       "z_dim": [64],
-      "tf_seed": range(num_repeat)
   }
-  tasks = task_utils.CrossProduct(config)
-  # Add GAN and dataset specific hyperparams.
-  for task in tasks:
-    task.update(GetDefaultParams(
-        params.GetParameters(task["gan_type"], task["dataset"])))
-  return tasks
+  return CreateCrossProductAndAddDefaultParams(config)
+
+
+def TestNormalization():
+  """Run for one epoch over different normalizations."""
+  config = {
+      "gan_type": ["GAN_PENALTY", "WGAN_PENALTY"],
+      "penalty_type": [consts.NO_PENALTY],
+      "discriminator_normalization": [consts.BATCH_NORM,
+                                      consts.SPECTRAL_NORM],
+      "dataset": ["mnist"],
+      "training_steps": [60000 // BATCH_SIZE],
+      "save_checkpoint_steps": [10000],
+      "architecture": [consts.INFOGAN_ARCH],
+      "batch_size": [BATCH_SIZE],
+      "tf_seed": [42],
+      "z_dim": [64],
+  }
+  return CreateCrossProductAndAddDefaultParams(config)
+
+
+def TestNewDatasets():
+  """Run for one epoch over all tested GANs."""
+  config = {
+      "gan_type": ["GAN_PENALTY"],
+      "penalty_type": [consts.NO_PENALTY],
+      "dataset": ["celebahq128", "imagenet64", "imagenet128", "lsun-bedroom"],
+      "training_steps": [100],
+      "save_checkpoint_steps": [50],
+      "architecture": [consts.DCGAN_ARCH],
+      "batch_size": [BATCH_SIZE],
+      "tf_seed": [42],
+      "z_dim": [100],
+  }
+  return CreateCrossProductAndAddDefaultParams(config)
+
+
+def TestGansWithPenaltyNewDatasets(architecture):
+  """Run for one epoch over all tested GANs."""
+  config = {
+      "gan_type": ["GAN_PENALTY", "WGAN_PENALTY"],
+      "penalty_type": [consts.NO_PENALTY, consts.WGANGP_PENALTY],
+      "dataset": ["celebahq128", "imagenet128", "lsun-bedroom"],
+      "training_steps": [162000 * 80 // BATCH_SIZE],
+      "save_checkpoint_steps": [10000],
+      "architecture": [architecture],
+      "batch_size": [BATCH_SIZE],
+      "tf_seed": [42],
+      "z_dim": [128],
+  }
+  return CreateCrossProductAndAddDefaultParams(config)
 
 
 def GetDefaultParams(gan_params):
@@ -95,127 +149,543 @@ def GetDefaultParams(gan_params):
   return ret
 
 
-def GetSample(gan_params):
-  """Get one sample for each range specified in gan_params."""
-  ret = {}
-  for param_name, param_info in sorted(gan_params.items()):
-    if param_info.is_discrete:
-      v = random.choice(param_info.range)
-    else:
-      assert isinstance(param_info.default, float)
-      assert param_info.range[0] <= param_info.range[1]
-      v = random.uniform(param_info.range[0], param_info.range[1])
-      if param_info.is_log_scale:
-        v = math.pow(10, v)
-    ret[param_name] = v
+def BestModelSNDCGan():
+  # These models are matching table 5 (SNDCGan) from the paper.
+  best_models = [
+    ## Without normalization and without penalty.
+    # Line 1: FID score: 28.66
+    {
+      "dataset": "cifar10",
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0001,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.NO_NORMALIZATION,
+      "tf_seed": 2,
+      "lambda": 10, # this should not be needed for this one.
+    },
+    # Line 2: FID score: 33.23
+    {
+      "dataset": "cifar10",
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.NO_NORMALIZATION,
+      "tf_seed": 2,
+      "lambda": 10, # this should not be needed for this one.
+    },
+    # Line 3: FID score: 61.15
+    {
+      "dataset": "celebahq128",
+      "disc_iters": 1,
+      "discriminator_normalization": consts.NO_NORMALIZATION,
+      "penalty_type": consts.NO_PENALTY,
+      "tf_seed": 23,
+      "training_steps": 100000,
+      "learning_rate": 0.000412,
+      "beta1": 0.246,
+      "beta2": 0.341,
+      "lambda": 10, # this should not be needed for this one.
+    },
+    # Line 4: FID score: 62.96
+    {
+      "dataset": "celebahq128",
+      "training_steps": 100000,
+      "penalty_type": consts.NO_PENALTY,
+      "discriminator_normalization": consts.NO_NORMALIZATION,
+      "learning_rate": 0.000254,
+      "beta1": 0.222,
+      "beta2": 0.599,
+      "disc_iters": 1,
+      "tf_seed": 23,
+      "lambda": 10, # this should not be needed for this one.
+    },
+    # Line 5: FID score: 163.51
+    {
+      "dataset": "lsun-bedroom",
+      "training_steps": 100000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.NO_NORMALIZATION,
+      "tf_seed": 23,
+      "lambda": 10, # this should not be needed for this one.
+    },
+    # Line 6: FID score: 167.15
+    {
+      "dataset": "lsun-bedroom",
+      "training_steps": 100000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.000062,
+      "beta1": 0.608,
+      "beta2": 0.620,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.NO_NORMALIZATION,
+      "tf_seed": 23,
+      "lambda": 10, # this should not be needed for this one.
+    },
 
-  return ret
+    ## With normalization
+
+    # Line 7: FID score: 25.27
+    {
+      "dataset": "cifar10",
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 1,
+    },
+    # Line 8: FID score: 26.16
+    {
+      "dataset": "cifar10",
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0001,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 10,
+    },
+    # Line 9: FID score: 28.21
+    {
+      "dataset": "celebahq128",
+      "training_steps": 100000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.9,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 10,
+    },
+    # Line 10: FID score: 29.92
+    {
+      "dataset": "celebahq128",
+      "training_steps": 100000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.000154,
+      "beta1": 0.246,
+      "beta2": 0.734,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 0.144,
+    },
+    # Line 11: FID score: 53.59
+    {
+      "dataset": "lsun-bedroom",
+      "training_steps": 100000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.000264,
+      "beta1": 0.011,
+      "beta2": 0.966,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 0.300,
+    },
+    # Line 12: FID score: 56.71
+    {
+      "dataset": "lsun-bedroom",
+      "training_steps": 100000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.00192,
+      "beta1": 0.097,
+      "beta2": 0.938,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 0.580,
+    },
+
+    ## With normalization and penalty
+
+    # Line 13: FID score: 25.27
+    {
+      "dataset": "cifar10",
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 1,
+    },
+    # Line 14: FID score: 26.00
+    {
+      "dataset": "cifar10",
+      "training_steps": 200000,
+      "penalty_type": consts.WGANGP_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 10,
+    },
+    # Line 15: FID score: 24.67
+    {
+      "dataset": "celebahq128",
+      "training_steps": 100000,
+      "penalty_type": consts.WGANGP_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 1,
+    },
+    # Line 16: FID score: 25.22
+    {
+      "dataset": "celebahq128",
+      "training_steps": 100000,
+      "penalty_type": consts.WGANGP_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.900,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 1,
+    },
+    # Line 17: FID score: 53.59
+    {
+      "dataset": "lsun-bedroom",
+      "training_steps": 100000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.000264,
+      "beta1": 0.011,
+      "beta2": 0.966,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 0.300,
+    },
+    # Line 18: FID score: 56.71
+    {
+      "dataset": "lsun-bedroom",
+      "training_steps": 100000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.00192,
+      "beta1": 0.097,
+      "beta2": 0.938,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 0.580,
+    },
+
+  ]
+
+  for model in best_models:
+    model.update({
+      "architecture": consts.SNDCGAN_ARCH,
+      "batch_size": 64,
+      "gan_type": consts.GAN_WITH_PENALTY,
+      "optimizer": "adam",
+      "save_checkpoint_steps": 20000,
+      "z_dim": 128,
+    })
+
+  return best_models
 
 
-def TuneParams(gan_types, dataset_name, num_samples,
-               num_repeat, range_type="wide"):
-  """Create a set of tasks for optimizing model score."""
-  all_tasks = []
-  for gan_type in gan_types:
-    gan_params = params.GetParameters(gan_type, dataset_name, range_type)
-    # Always include default params.
-    samples = [GetDefaultParams(gan_params)]
-    for _ in range(num_samples - 1):
-      samples.append(GetSample(gan_params))
+def BestModelResnet19():
+  # These models are matching table 7 (ResNet19) from the paper.
+  best_models = [
+    ## Without normalization and without penalty.
+    # Line 1: FID score: 34.29
+    {
+      "dataset": "celebahq128",
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0000338,
+      "beta1": 0.3753,
+      "beta2": 0.9982,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.NO_NORMALIZATION,
+      "tf_seed": 2,
+      "lambda": 10, # this should not be needed for this one.
+    },
+    # Line 2: FID score: 35.85
+    {
+      "dataset": "celebahq128",
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0001,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.NO_NORMALIZATION,
+      "tf_seed": 2,
+      "lambda": 10, # this should not be needed for this one.
+    },
+    # Line 3: FID score: 102.74
+    {
+      "dataset": "lsun-bedroom",
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.000322,
+      "beta1": 0.5850,
+      "beta2": 0.9904,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.NO_NORMALIZATION,
+      "tf_seed": 2,
+      "lambda": 10, # this should not be needed for this one.
+    },
+    # Line 4: FID score: 112.92
+    {
+      "dataset": "lsun-bedroom",
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.000193,
+      "beta1": 0.1947,
+      "beta2": 0.8819,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.NO_NORMALIZATION,
+      "tf_seed": 2,
+      "lambda": 10, # this should not be needed for this one.
+    },
 
-    for idx, sample in enumerate(samples):
-      for i in range(num_repeat):
-        s = copy.deepcopy(sample)
-        s["gan_type"] = gan_type
-        s["sample_id"] = idx  # For joins in dremel.
-        s["dataset"] = dataset_name
-        s["tf_seed"] = i
-        if dataset_name == "cifar10":
-          # 100 epochs for CIFAR100
-          epoch = 50000
-          s["training_steps"] = 100 * epoch // BATCH_SIZE
-        elif dataset_name == "celeba":
-          # 40 epochs for CelebA
-          epoch = 162000
-          s["training_steps"] = 40 * epoch // BATCH_SIZE
-        else:
-          # 20 epochs for MNIST/FASHION-MNIST
-          epoch = 50000
-          s["training_steps"] = 20 * epoch // BATCH_SIZE
-        s["save_checkpoint_steps"] = 5 * epoch // BATCH_SIZE
-        all_tasks.append(s)
+    ## With normalization
 
-  all_tasks = [collections.OrderedDict(sorted(x.items())) for x in all_tasks]
-  return all_tasks
+    # Line 5: FID score: 30.02
+    {
+      "dataset": "celebahq128",
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0001,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.LAYER_NORM,
+      "tf_seed": 2,
+      "lambda": 0.001,
+    },
+    # Line 6: FID score: 32.05
+    {
+      "dataset": "celebahq128",
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0001,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.LAYER_NORM,
+      "tf_seed": 2,
+      "lambda": 0.01,
+    },
+    # Line 7: FID score: 41.6
+    {
+      "dataset": "lsun-bedroom",
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 1,
+    },
+    # Line 8: FID score: 42.51
+    {
+      "dataset": "lsun-bedroom",
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0002851,
+      "beta1": 0.1019,
+      "beta2": 0.998,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 5.6496,
+    },
 
+    ## With normalization and penalty
 
-def BestFIDPerModel(csv_file_pattern):
-  """Returns a dict with best score and checkpoint per model."""
-  best_score_per_gan = {}
-  for csv_file_path in tf.gfile.Glob(csv_file_pattern):
-    with tf.gfile.Open(csv_file_path, "r") as csvfile:
-      reader = csv.DictReader(csvfile)
-      for row in reader:
-        model = row["model"]
-        fid_score = float(row["fid_score"])
-        if best_score_per_gan.get(model, (100000.0, ""))[0] > fid_score:
-          best_score_per_gan[model] = (fid_score, row["checkpoint_path"])
-  return best_score_per_gan
+    # Line 9: FID score: 29.04
+    {
+      "dataset": "celebahq128",
+      "training_steps": 200000,
+      "penalty_type": consts.WGANGP_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 1,
+    },
+    # Line 10: FID score: 29.13
+    {
+      "dataset": "celebahq128",
+      "training_steps": 200000,
+      "penalty_type": consts.DRAGAN_PENALTY,
+      "learning_rate": 0.0001,
+      "beta1": 0.5,
+      "beta2": 0.9,
+      "disc_iters": 5,
+      "discriminator_normalization": consts.LAYER_NORM,
+      "tf_seed": 2,
+      "lambda": 1,
+    },
+    # Line 11: FID score: 40.36
+    {
+      "dataset": "lsun-bedroom",
+      "training_steps": 200000,
+      "penalty_type": consts.WGANGP_PENALTY,
+      "learning_rate": 0.0001281,
+      "beta1": 0.7108,
+      "beta2": 0.9792,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.LAYER_NORM,
+      "tf_seed": 2,
+      "lambda": 0.1451,
+    },
+    # Line 12: FID score: 41.60
+    {
+      "dataset": "lsun-bedroom",
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 1,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 1,
+    }]
 
+  for model in best_models:
+    model.update({
+      "architecture": consts.RESNET5_ARCH,
+      "batch_size": 64,
+      "gan_type": consts.GAN_WITH_PENALTY,
+      "optimizer": "adam",
+      "save_checkpoint_steps": 20000,
+      "z_dim": 128,
+    })
 
-def GetTaskProtoFromCheckpoint(checkpoint_path):
-  task_file = os.path.join(os.path.dirname(checkpoint_path), "../task")
-  if not tf.gfile.Exists(task_file):
-    logging.warning("Cant find task_file at %s", task_file)
-    assert False, "Task file %s not found." % task_file
-  content = tf.gfile.Open(task_file, mode="r").read()
-  return text_format.Parse(content, simple_task_pb2.Task())
+  return best_models
 
+def BestModelResnetCifar():
+  # These models are matching table 7 (ResNet19) from the paper.
+  best_models = [
+    ## Without normalization and without penalty.
+    # Line 1: FID score: 28.12
+    {
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 5,
+      "discriminator_normalization": consts.NO_NORMALIZATION,
+      "tf_seed": 2,
+      "lambda": 10, # this should not be needed for this one.
+    },
+    # Line 2: FID score: 30.08
+    {
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0001,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 5,
+      "discriminator_normalization": consts.NO_NORMALIZATION,
+      "tf_seed": 2,
+      "lambda": 10, # this should not be needed for this one.
+    },
 
-def Phase3Auto(model_list, csv_file_pattern, num_repeat):
-  """Phase 3: repeat best model N times with different seeds."""
-  all_tasks = []
-  best_fid_per_model = BestFIDPerModel(csv_file_pattern)
-  all_checkpoints = []
-  for model in model_list:
-    all_checkpoints.append(best_fid_per_model[model][1])
-    logging.info("Model: %s, Best task: %s", model,
-                 best_fid_per_model[model][1])
+    ## With normalization.
 
-  for checkpoint in all_checkpoints:
-    task_proto = GetTaskProtoFromCheckpoint(checkpoint)
-    options = task_utils.ParseOptions(task_proto)
-    # Map unicode to string.
-    for k in options.keys():
-      if isinstance(options[k], unicode):
-        options[k] = str(options[k])
+    # Line 3: FID score: 22.91
+    {
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 5,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 10,
+    },
 
-    for seed in range(num_repeat):
-      s = copy.deepcopy(options)
-      s["tf_seed"] = seed
-      all_tasks.append(s)
+    # Line 4: FID score: 23.22
+    {
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 5,
+      "discriminator_normalization": consts.NO_NORMALIZATION,
+      "tf_seed": 2,
+      "lambda": 1,
+    },
 
-  all_tasks = [collections.OrderedDict(sorted(x.items())) for x in all_tasks]
-  return all_tasks
+    ## With normalization and penalty.
 
+    # Line 5: FID score: 22.73
+    {
+      "training_steps": 200000,
+      "penalty_type": consts.WGANGP_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 5,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 1,
+    },
 
-def AdamVsRmsprop(datasets):
-  """WGAN uses RMSProp, how much does it affect the scores?."""
-  ret = []
-  for dataset in datasets:
-    # Make sure we have the same parameters as in phase1.
-    random.seed(123)
-    tasks = TuneParams(
-        ALL_GANS, dataset, num_samples=100, num_repeat=1, range_type="wide")
-    for optimizer in ["adam", "rmsprop"]:
-      for i in range(len(tasks)):
-        if tasks[i]["gan_type"] != "WGAN":
-          continue
-        task = copy.deepcopy(tasks[i])
-        task["optimizer"] = optimizer
-        ret.append(task)
+    # Line 6: FID score: 22.91
+    {
+      "training_steps": 200000,
+      "penalty_type": consts.NO_PENALTY,
+      "learning_rate": 0.0002,
+      "beta1": 0.5,
+      "beta2": 0.999,
+      "disc_iters": 5,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
+      "tf_seed": 2,
+      "lambda": 10,
+    },
+  ]
 
-  return ret
+  for model in best_models:
+    model.update({
+      "architecture": consts.RESNET_CIFAR,
+      "dataset": "cifar10",
+      "batch_size": 64,
+      "gan_type": consts.GAN_WITH_PENALTY,
+      "optimizer": "adam",
+      "save_checkpoint_steps": 20000,
+      "z_dim": 128,
+    })
+
+  return best_models
 
 
 def GetTasks(experiment):
@@ -224,64 +694,21 @@ def GetTasks(experiment):
 
   if experiment == "test":
     return TestExp()
-  # PHASE 1 EXPERIMENTS BELOW (WIDE RANGE)
-  elif experiment == "phase1_gan8_mnist_sample100_rep1":
-    return TuneParams(ALL_GANS, "mnist", num_samples=100, num_repeat=1,
-                      range_type="wide")
-  elif experiment == "phase1_gan8_fashionmnist_sample100_rep1":
-    return TuneParams(ALL_GANS, "fashion-mnist", num_samples=100, num_repeat=1,
-                      range_type="wide")
-  elif experiment == "phase1_gan8_cifar_sample100_rep1":
-    return TuneParams(ALL_GANS, "cifar10", num_samples=100, num_repeat=1,
-                      range_type="wide")
-  elif experiment == "phase1_gan8_celeba_sample100_rep1":
-    return TuneParams(ALL_GANS, "celeba", num_samples=100, num_repeat=1,
-                      range_type="wide")
-  elif experiment == "phase1_gan8_triangles_sample100_rep1":
-    return TuneParams(ALL_GANS, "triangles", num_samples=100, num_repeat=1,
-                      range_type="wide")
-  # PHASE 2 EXPERIMENTS BELOW (NARROW RANGE)
-  elif experiment == "phase2_gan8_mnist_sample50_rep1":
-    return TuneParams(ALL_GANS, "mnist", num_samples=50, num_repeat=1,
-                      range_type="narrow")
-  elif experiment == "phase2_gan8_fashionmnist_sample50_rep1":
-    return TuneParams(ALL_GANS, "fashion-mnist", num_samples=50, num_repeat=1,
-                      range_type="narrow")
-  elif experiment == "phase2_gan8_cifar_sample50_rep1":
-    return TuneParams(ALL_GANS, "cifar10", num_samples=50, num_repeat=1,
-                      range_type="narrow")
-  elif experiment == "phase2_gan8_celeba_sample50_rep1":
-    return TuneParams(ALL_GANS, "celeba", num_samples=50, num_repeat=1,
-                      range_type="narrow")
-  # PHASE 3 EXPERIMENTS BELOW (RETRY BEST FROM WIDE RANGE)
-  elif experiment == "phase3_mnist":
-    return Phase3Auto(
-        ALL_GANS,
-        os.path.join(FLAGS.phase1_dir,
-                     "phase1_gan8_mnist_sample100_rep1/task_num_*/scores.csv"),
-        num_repeat=50)
-  elif experiment == "phase3_fashionmnist":
-    return Phase3Auto(
-        ALL_GANS,
-        os.path.join(
-            FLAGS.phase1_dir,
-            "phase1_gan8_fashionmnist_sample100_rep1/task_num_*/scores.csv"),
-        num_repeat=50)
-  elif experiment == "phase3_cifar":
-    return Phase3Auto(
-        ALL_GANS,
-        os.path.join(FLAGS.phase1_dir,
-                     "phase1_gan8_cifar_sample100_rep1/task_num_*/scores.csv"),
-        num_repeat=50)
-  elif experiment == "phase3_celeba":
-    return Phase3Auto(
-        ALL_GANS,
-        os.path.join(FLAGS.phase1_dir,
-                     "phase1_gan8_celeba_sample100_rep1/task_num_*/scores.csv"),
-        num_repeat=50)
-  # Additional experiments.
-  elif experiment == "adam_vs_rmsprop_cifar_celeba":
-    return AdamVsRmsprop(datasets=["cifar10", "celeba"])
+  elif experiment == "test_penalty":
+    return TestGansWithPenalty()
+  elif experiment == "test_new_datasets":
+    return TestNewDatasets()
+  elif experiment == "test_penalty_new_datasets":
+    return TestGansWithPenaltyNewDatasets(consts.DCGAN_ARCH)
+  elif experiment == "test_penalty_resnet5":
+    return TestGansWithPenaltyNewDatasets(consts.RESNET5_ARCH)
+  elif experiment == "test_normalization":
+    return TestNormalization();
+  elif experiment == "best_models_sndcgan":
+    return BestModelSNDCGan();
+  elif experiment == "best_models_resnet19":
+    return BestModelResnet19();
+  elif experiment == "best_models_resnet_cifar":
+    return BestModelResnetCifar();
   else:
     raise ValueError("Unknown experiment %s" % experiment)
-

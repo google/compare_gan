@@ -35,6 +35,7 @@ logging = tf.logging
 flags.DEFINE_string("workdir", "", "The working directory for all tasks.")
 flags.DEFINE_integer("task_num", 0, "The task number to use.")
 flags.DEFINE_string("command", "all", "What command to execute: all, train, eval.")
+flags.DEFINE_bool("enable_tf_profile", False, "Whether to run TFProf.")
 
 def main(_):
   tf.logging.set_verbosity(tf.logging.INFO)
