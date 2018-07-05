@@ -27,10 +27,10 @@ fi
 echo "Preparing datasets (mnist, fashionmnist, cifar10, celeba) in ${DATASET_DIR?}"
 mkdir ${DATASET_DIR?}
 
-datasets=(image_mnist image_fashion_mnist image_cifar10 image_celeba_tune)
+datasets=(image_mnist image_fashion_mnist image_cifar10 image_celeba)
 for dataset in "${datasets[@]}"; do
   echo "Dataset is ${dataset?}"
-  `${T2T_DATAGEN?} --data_dir=${DATASET_DIR?} --problem=${dataset?} --tmp_dir=${TMP_DIR?}`
+  ${T2T_DATAGEN?} --data_dir=${DATASET_DIR?} --problem=${dataset?} --tmp_dir=${TMP_DIR?}
 done
 
 echo "Getting inception model."

@@ -1,7 +1,15 @@
 ## Compare GAN code.
 
 This is the code that was used in "Are GANs Created Equal? A Large-Scale Study"
-paper (https://arxiv.org/abs/1711.10337).
+paper (https://arxiv.org/abs/1711.10337) and in "The GAN Landscape: Losses, Architectures, Regularization, and Normalization" (https://openreview.net/pdf?id=SkeFUsQNx7).
+
+If you want to see the version used only in the first paper - please see the *v1* branch of this repository.
+
+
+### Best hyperparameters
+
+This repository also contains the values for the best hyperparameters for different combinations of models, regularizations and penalties.
+You can see them in ``generate_tasks_lib.py`` file and train using ``--experiment=best_models_sndcgan``
 
 ### Installation:
 
@@ -18,6 +26,12 @@ compare_gan_prepare_datasets.sh
 ```
 
 It will download all the necessary datasets and frozen TF graphs. By default it will store them in ``/tmp/datasets``.
+
+WARNING: by default this script only downloads and installs small datasets - it doesn't download celebaHQ or lsun bedrooms.
+
+*  **Lsun bedrooms dataset**: If you want to install lsun-bedrooms you need to run t2t-datagen yourself (this dataset will take couple hours to download and unpack).
+
+*  **CelebaHQ dataset**: currently it is not available in tensor2tensor. Please use the [ProgressiveGAN github](https://github.com/tkarras/progressive_growing_of_gans) for instructions on how to prepare it.
 
 ### Running
 

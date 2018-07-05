@@ -16,42 +16,40 @@
 """Implementation of the VAE algorithm (https://arxiv.org/abs/1312.6114)."""
 from __future__ import division
 
+from compare_gan.src.gans import consts
 from compare_gan.src.gans.abstract_gan import AbstractGAN
 from compare_gan.src.gans.ops import lrelu, conv2d, deconv2d, batch_norm, linear, gaussian
+
 import tensorflow as tf
 
 
 class VAE(AbstractGAN):
   """Vanilla Variational Autoencoder."""
 
-  def __init__(self, sess, dataset_content, dataset_parameters,
-               training_parameters, checkpoint_dir, result_dir, log_dir):
+  def __init__(self, dataset_content, parameters, runtime_info):
     super(VAE, self).__init__(
         model_name="VAE",
-        sess=sess,
         dataset_content=dataset_content,
-        dataset_parameters=dataset_parameters,
-        training_parameters=training_parameters,
-        checkpoint_dir=checkpoint_dir,
-        result_dir=result_dir,
-        log_dir=log_dir)
+        parameters=parameters,
+        runtime_info=runtime_info)
 
   def encoder(self, x, is_training, reuse=False):
     """Implements the Gaussian Encoder."""
 
+    sn = self.discriminator_normalization == consts.SPECTRAL_NORM
     with tf.variable_scope("encoder", reuse=reuse):
-      net = lrelu(conv2d(x, 64, 4, 4, 2, 2, name="en_conv1"))
-      net = conv2d(net, 128, 4, 4, 2, 2, name="en_conv2")
-      if self.discriminator_batchnorm:
+      net = lrelu(conv2d(x, 64, 4, 4, 2, 2, name="en_conv1", use_sn=sn))
+      net = conv2d(net, 128, 4, 4, 2, 2, name="en_conv2", use_sn=sn)
+      if self.discriminator_normalization == consts.BATCH_NORM:
         net = batch_norm(net, is_training=is_training, scope="en_bn2")
       net = lrelu(net)
       net = tf.reshape(net, [self.batch_size, -1])
-      net = linear(net, 1024, scope="en_fc3")
-      if self.discriminator_batchnorm:
+      net = linear(net, 1024, scope="en_fc3", use_sn=sn)
+      if self.discriminator_normalization == consts.BATCH_NORM:
         net = batch_norm(net, is_training=is_training, scope="en_bn3")
       net = lrelu(net)
 
-      gaussian_params = linear(net, 2 * self.z_dim, scope="en_fc4")
+      gaussian_params = linear(net, 2 * self.z_dim, scope="en_fc4", use_sn=sn)
       mean = gaussian_params[:, :self.z_dim]
       stddev = 1e-6 + tf.nn.softplus(gaussian_params[:, self.z_dim:])
     return mean, stddev
@@ -62,17 +60,25 @@ class VAE(AbstractGAN):
     width = self.input_width
     with tf.variable_scope("decoder", reuse=reuse):
       net = tf.nn.relu(
-          batch_norm(linear(z, 1024, scope="de_fc1"), is_training=is_training,
-             scope="de_bn1"))
+          batch_norm(
+              linear(z, 1024, scope="de_fc1"),
+              is_training=is_training,
+              scope="de_bn1"))
       net = tf.nn.relu(
-          batch_norm(linear(net, 128 * (height // 4) * (width // 4), scope="de_fc2"),
-             is_training=is_training, scope="de_bn2"))
+          batch_norm(
+              linear(net, 128 * (height // 4) * (width // 4), scope="de_fc2"),
+              is_training=is_training,
+              scope="de_bn2"))
       net = tf.reshape(net, [self.batch_size, height // 4, width // 4, 128])
-      net = tf.nn.relu(batch_norm(deconv2d(
-          net, [self.batch_size, height // 2, width // 2, 64], 4, 4, 2, 2, name="de_dc3"),
-                          is_training=is_training, scope="de_bn3"))
-      out = tf.nn.sigmoid(deconv2d(
-          net, [self.batch_size, height, width, self.c_dim], 4, 4, 2, 2, name="de_dc4"))
+      net = tf.nn.relu(
+          batch_norm(
+              deconv2d(
+                  net, [self.batch_size, height // 2, width // 2, 64],
+                  4, 4, 2, 2, name="de_dc3"),
+              is_training=is_training, scope="de_bn3"))
+      out = tf.nn.sigmoid(
+          deconv2d(net, [self.batch_size, height, width, self.c_dim],
+                   4, 4, 2, 2, name="de_dc4"))
       return out
 
   def build_model(self, is_training=True):
@@ -130,9 +136,13 @@ class VAE(AbstractGAN):
   def z_generator(self, batch_size, z_dim):
     return gaussian(batch_size, z_dim)
 
-  def run_single_train_step(self, batch_images, batch_z, counter, g_loss):
+  def z_tf_generator(self, batch_size, z_dim, name=None):
+    """Returns the z-generator, as tensorflow op."""
+    return tf.random_normal((batch_size, z_dim), name=name)
+
+  def run_single_train_step(self, batch_images, batch_z, counter, g_loss, sess):
     # Update the autoencoder
-    _, summary_str, _, nll_loss, kl_loss = self.sess.run([
+    _, summary_str, _, nll_loss, kl_loss = sess.run([
         self.optim, self.merged_summary_op, self.loss,
         self.neg_loglikelihood, self.kl_divergence], feed_dict={
             self.inputs: batch_images, self.z: batch_z
@@ -142,5 +152,5 @@ class VAE(AbstractGAN):
     self.writer.add_summary(summary_str, counter)
     return kl_loss, nll_loss
 
-  def visualize_results(self, epoch):
-    super(VAE, self).visualize_results(epoch, z_distribution=gaussian)
+  def visualize_results(self, step, sess):
+    super(VAE, self).visualize_results(step, sess, z_distribution=gaussian)

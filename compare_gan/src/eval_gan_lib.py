@@ -22,18 +22,17 @@ import os
 
 from compare_gan.src import fid_score as fid_score_lib
 from compare_gan.src import gan_lib
+from compare_gan.src import ms_ssim_score
 from compare_gan.src import params
+from compare_gan.src.gans import consts
 
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 
 flags = tf.flags
 logging = tf.logging
-
-flags.DEFINE_integer("num_test_examples", 10000,
-                     "Number of test examples to evaluate on.")
 FLAGS = flags.FLAGS
-
 
 # This stores statistics for the real data and should be computed only
 # once for the whole execution.
@@ -54,21 +53,27 @@ DEFAULT_VALUES = {
     "lambda": -1.0,
     "disc_iters": -1,
     "beta1": -1.0,
+    "beta2": -1.0,
     "gamma": -1.0,
+    "penalty_type": "none",
+    "discriminator_spectralnorm": False,
+    "architecture": "unknown",
 }
 
 # Inception batch size.
 INCEPTION_BATCH = 50
 
 # List of models that we consider.
-SUPPORTED_GANS = ["GAN", "GAN_MINMAX", "WGAN", "WGAN_GP",
-                  "DRAGAN", "LSGAN", "VAE", "BEGAN"]
+SUPPORTED_GANS = [
+    "GAN", "GAN_MINMAX", "WGAN", "WGAN_GP", "DRAGAN", "LSGAN", "VAE", "BEGAN"
+] + consts.MODELS_WITH_PENALTIES
+
 
 def GetAllTrainingParams():
-  all_params = set()
+  all_params = set(["architecture"])
   for gan_type in SUPPORTED_GANS:
     for dataset in ["mnist", "fashion-mnist", "cifar10", "celeba"]:
-      p = params.GetParameters(gan_type, dataset, "wide")
+      p = params.GetParameters(gan_type, "wide")
       all_params.update(p.keys())
   logging.info("All training parameter exported: %s", sorted(all_params))
   return sorted(all_params)
@@ -76,13 +81,15 @@ def GetAllTrainingParams():
 
 # Fake images are already re-scaled to [0, 255] range.
 def GetInceptionScore(fake_images, inception_graph):
+  assert fake_images.shape[3] == 3
   num_images = fake_images.shape[0]
   assert num_images % INCEPTION_BATCH == 0
 
   with tf.Graph().as_default():
     images = tf.constant(fake_images)
     inception_score_op = fid_score_lib.inception_score_fn(
-        images, num_batches=num_images // INCEPTION_BATCH,
+        images,
+        num_batches=num_images // INCEPTION_BATCH,
         inception_graph=inception_graph)
     with tf.train.MonitoredSession() as sess:
       inception_score = sess.run(inception_score_op)
@@ -92,22 +99,206 @@ def GetInceptionScore(fake_images, inception_graph):
 # Images must have the same resolution and pixels must be in 0..255 range.
 def ComputeTFGanFIDScore(fake_images, real_images, inception_graph):
   """Compute FID score using TF.Gan library."""
-  assert fake_images.shape == real_images.shape
+  assert fake_images.shape[3] == 3
+  assert real_images.shape[3] == 3
+  bs_real = real_images.shape[0]
+  bs_fake = fake_images.shape[0]
+  assert bs_real % INCEPTION_BATCH == 0
+  assert bs_fake % INCEPTION_BATCH == 0
+  assert bs_real >= bs_fake and bs_real % bs_fake == 0
+  ratio = bs_real // bs_fake
+  logging.info("Ratio of real/fake images is: %d", ratio)
   with tf.Graph().as_default():
-    fake_images_batch, real_images_batch = tf.train.batch(
-        [tf.convert_to_tensor(fake_images, dtype=tf.float32),
-         tf.convert_to_tensor(real_images, dtype=tf.float32)],
+    fake_images_batch = tf.train.batch(
+        [tf.convert_to_tensor(fake_images, dtype=tf.float32)],
         enqueue_many=True,
         batch_size=INCEPTION_BATCH)
+    real_images_batch = tf.train.batch(
+        [tf.convert_to_tensor(real_images, dtype=tf.float32)],
+        enqueue_many=True,
+        batch_size=INCEPTION_BATCH * ratio)
     eval_fn = fid_score_lib.get_fid_function(
         gen_image_tensor=fake_images_batch,
         eval_image_tensor=real_images_batch,
+        num_gen_images=fake_images.shape[0],
         num_eval_images=real_images.shape[0],
         image_range="0_255",
         inception_graph=inception_graph)
     with tf.train.MonitoredTrainingSession() as sess:
       fid_score = eval_fn(sess)
   return fid_score
+
+
+def GetRealImages(dataset,
+                  split_name,
+                  num_examples,
+                  failure_on_insufficient_examples=True):
+  """Get num_examples images from the given dataset/split."""
+  # Multithread and buffer could improve the training speed by 20%, however it
+  # consumes more memory. In evaluation, we used single thread without buffer
+  # to avoid using too much memory.
+  dataset_content = gan_lib.load_dataset(
+      dataset,
+      split_name=split_name,
+      num_threads=1,
+      buffer_size=0)
+  # Get real images from the dataset. In the case of a 1-channel
+  # dataset (like mnist) convert it to 3 channels.
+  data_x = []
+  with tf.Graph().as_default():
+    get_next = dataset_content.make_one_shot_iterator().get_next()
+    with tf.train.MonitoredTrainingSession() as sess:
+      for i in range(num_examples):
+        try:
+          data_x.append(sess.run(get_next[0]))
+        except tf.errors.OutOfRangeError:
+          logging.error("Reached the end of dataset. Read: %d samples." % i)
+          break
+
+  real_images = np.array(data_x)
+  if real_images.shape[0] != num_examples:
+    if failure_on_insufficient_examples:
+      raise ValueError("Not enough examples in the dataset %s: %d / %d" %
+                       (dataset, real_images.shape[0], num_examples))
+    else:
+      logging.error("Not enough examples in the dataset %s: %d / %d", dataset,
+                    real_images.shape[0], num_examples)
+
+  real_images *= 255.0
+  return real_images
+
+
+def ShouldRunAccuracyLossTrainVsTest(options):
+  """Only run the accuracy test for the NS GAN."""
+  return options["gan_type"] == consts.GAN_WITH_PENALTY
+
+
+def ComputeAccuracyLoss(options, gan, test_images, sess,
+                        result_dict, max_train_examples=50000, num_repeat=5):
+  """Compute discriminator accurate/loss on train/test/fake set."""
+  train_images = GetRealImages(
+      options["dataset"],
+      split_name="train",
+      num_examples=max_train_examples,
+      failure_on_insufficient_examples=False)
+  if train_images.shape[0] < test_images.shape[0]:
+    raise ValueError("num_train %d must be larger than num_test %d." %
+                     (train_images.shape[0], test_images.shape[0]))
+
+  logging.info("Evaluating training and test accuracy...")
+
+  num_batches = int(np.floor(test_images.shape[0] / gan.batch_size))
+  if num_batches * gan.batch_size < test_images.shape[0]:
+    logging.error("Ignoring the last batch with %d samples / %d epoch size.",
+                  test_images.shape[0] - num_batches * gan.batch_size,
+                  gan.batch_size)
+
+  train_accuracies = []
+  test_accuracies = []
+  fake_accuracies = []
+  train_d_losses = []
+  test_d_losses = []
+  for repeat in range(num_repeat):
+    idx = np.random.choice(train_images.shape[0], test_images.shape[0])
+    train_subset = [train_images[i] for i in idx]
+
+    train_predictions = []
+    test_predictions = []
+    fake_predictions = []
+    train_d_losses = []
+    test_d_losses = []
+
+    for i in range(num_batches):
+      z_sample = gan.z_generator(gan.batch_size, gan.z_dim)
+      start_idx = i * gan.batch_size
+      end_idx = start_idx + gan.batch_size
+      test_batch = test_images[start_idx:end_idx]
+      train_batch = train_subset[start_idx:end_idx]
+
+      test_prediction, test_d_loss, fake_images = sess.run(
+          [gan.discriminator_output, gan.d_loss, gan.fake_images],
+          feed_dict={
+              gan.inputs: test_batch,
+              gan.z: z_sample
+          })
+      test_predictions.append(test_prediction[0])
+      test_d_losses.append(test_d_loss)
+
+      train_prediction, train_d_loss = sess.run(
+          [gan.discriminator_output, gan.d_loss],
+          feed_dict={
+              gan.inputs: train_batch,
+              gan.z: z_sample
+          })
+      train_predictions.append(train_prediction[0])
+      train_d_losses.append(train_d_loss)
+
+      fake_prediction = sess.run(
+          gan.discriminator_output, feed_dict={gan.inputs: fake_images})[0]
+      fake_predictions.append(fake_prediction)
+
+    discriminator_threshold = 0.5
+    train_predictions = [
+        x >= discriminator_threshold for x in train_predictions
+    ]
+    test_predictions = [x >= discriminator_threshold for x in test_predictions]
+    fake_predictions = [x < discriminator_threshold for x in fake_predictions]
+
+    train_accuracy = sum(train_predictions) / float(len(train_predictions))
+    test_accuracy = sum(test_predictions) / float(len(test_predictions))
+    fake_accuracy = sum(fake_predictions) / float(len(fake_predictions))
+    train_d_loss = np.mean(train_d_losses)
+    test_d_loss = np.mean(test_d_losses)
+    print(
+        "repeat %d: train_accuracy: %.3f, test_accuracy: %.3f, fake_accuracy: "
+        "%.3f, train_d_loss: %.3f, test_d_loss: %.3f" %
+        (repeat, train_accuracy, test_accuracy, fake_accuracy, train_d_loss,
+         test_d_loss))
+
+    train_accuracies.append(train_accuracy)
+    test_accuracies.append(test_accuracy)
+    fake_accuracies.append(fake_accuracy)
+    train_d_losses.append(train_d_loss)
+    test_d_losses.append(test_d_loss)
+
+  result_dict["train_accuracy"] = np.mean(train_accuracies)
+  result_dict["test_accuracy"] = np.mean(test_accuracies)
+  result_dict["fake_accuracy"] = np.mean(fake_accuracies)
+  result_dict["train_d_loss"] = np.mean(train_d_losses)
+  result_dict["test_d_loss"] = np.mean(test_d_losses)
+  return result_dict
+
+
+def ShouldRunMultiscaleSSIM(options):
+  msssim_datasets = ["celeba", "celebahq128"]
+  return options["dataset"] in msssim_datasets
+
+
+def ComputeMultiscaleSSIMScore(fake_images):
+  """Compute ms-ssim score ."""
+  batch_size = 64
+  with tf.Graph().as_default():
+    fake_images_batch = tf.train.shuffle_batch(
+        [tf.convert_to_tensor(fake_images, dtype=tf.float32)],
+        capacity=16*batch_size,
+        min_after_dequeue=8*batch_size,
+        num_threads=4,
+        enqueue_many=True,
+        batch_size=batch_size)
+
+    # Following section 5.3 of https://arxiv.org/pdf/1710.08446.pdf, we only
+    # evaluate 5 batches of the generated images.
+    eval_fn = ms_ssim_score.get_metric_function(
+        generated_images=fake_images_batch, num_batches=5)
+    with tf.train.MonitoredTrainingSession() as sess:
+      score = eval_fn(sess)
+  return score
+
+
+class FakeDatasetContent(object):
+
+  def batch(self, unused_batch_size):
+    pass
 
 
 def RunCheckpointEval(checkpoint_path, task_workdir, options, inception_graph):
@@ -123,44 +314,34 @@ def RunCheckpointEval(checkpoint_path, task_workdir, options, inception_graph):
   gan_type = options["gan_type"]
   if gan_type not in SUPPORTED_GANS:
     raise ValueError("Gan type %s is not supported." % gan_type)
-  dataset = options["dataset"]
 
-  dataset_content = gan_lib.load_dataset(dataset, split_name="test")
-  num_test_examples = FLAGS.num_test_examples
+  dataset = options["dataset"]
+  dataset_params = params.GetDatasetParameters(dataset)
+  dataset_params.update(options)
+  num_test_examples = dataset_params.get("eval_test_samples", 10000)
 
   if num_test_examples % INCEPTION_BATCH != 0:
     logging.info("Padding number of examples to fit inception batch.")
     num_test_examples -= num_test_examples % INCEPTION_BATCH
 
-  # Get real images from the dataset. In the case of a 1-channel
-  # dataset (like mnist) convert it to 3 channels.
-
-  data_x = []
-  with tf.Graph().as_default():
-    get_next = dataset_content.make_one_shot_iterator().get_next()
-    with tf.Session() as sess:
-      for _ in range(num_test_examples):
-        data_x.append(sess.run(get_next[0]))
-
-  real_images = np.array(data_x)
-  if real_images.shape[0] != num_test_examples:
-    raise ValueError("Not enough examples in the dataset.")
-
-  if real_images.shape[3] == 1:
-    real_images = np.tile(real_images, [1, 1, 1, 3])
-  real_images *= 255.0
+  real_images = GetRealImages(
+      options["dataset"],
+      split_name="test",
+      num_examples=num_test_examples)
   logging.info("Real data processed.")
 
+  result_dict = {}
+  default_value = -1.0
   # Get Fake images from the generator.
   samples = []
-  logging.info("Running eval on checkpoint path: %s", checkpoint_path)
+  logging.info("Running eval for dataset %s, checkpoint: %s, num_examples: %d ",
+               dataset, checkpoint_path, num_test_examples)
   with tf.Graph().as_default():
     with tf.Session() as sess:
       gan = gan_lib.create_gan(
           gan_type=gan_type,
           dataset=dataset,
-          sess=sess,
-          dataset_content=dataset_content,
+          dataset_content=FakeDatasetContent(),  # This should never be used.
           options=options,
           checkpoint_dir=checkpoint_dir,
           result_dir=result_dir,
@@ -182,35 +363,67 @@ def RunCheckpointEval(checkpoint_path, task_workdir, options, inception_graph):
         # FID score which we handle specially later.
         while np.isnan(x).any():
           logging.error("Detected NaN in fake_images! Returning NaN.")
-          return NAN_DETECTED, NAN_DETECTED
+          default_value = NAN_DETECTED
+          return result_dict, default_value
         samples.append(x)
+
+      if ShouldRunAccuracyLossTrainVsTest(options):
+        result_dict = ComputeAccuracyLoss(options, gan, real_images,
+                                          sess, result_dict)
 
   fake_images = np.concatenate(samples, axis=0)
   # Adjust the number of fake images to the number of images in the test set.
   fake_images = fake_images[:num_test_examples, :, :, :]
-  # In case we use a 1-channel dataset (like mnist) - convert it to 3 channel.
-  if fake_images.shape[3] == 1:
-    fake_images = np.tile(fake_images, [1, 1, 1, 3])
-  fake_images *= 255.0
-  logging.info("Fake data processed, computing inception score.")
-  inception_score = GetInceptionScore(fake_images, inception_graph)
-  logging.info("Inception score computed: %.3f", inception_score)
 
   assert fake_images.shape == real_images.shape
 
-  fid_score = ComputeTFGanFIDScore(fake_images, real_images, inception_graph)
+  # In case we use a 1-channel dataset (like mnist) - convert it to 3 channel.
+  if fake_images.shape[3] == 1:
+    fake_images = np.tile(fake_images, [1, 1, 1, 3])
+    # change the real_images' shape too - so that it keep matching
+    # fake_images' shape.
+    real_images = np.tile(real_images, [1, 1, 1, 3])
 
+  fake_images *= 255.0
+
+  logging.info("Fake data processed, computing inception score.")
+
+  result_dict["inception_score"] = GetInceptionScore(fake_images,
+                                                     inception_graph)
+  logging.info("Inception score computed: %.3f", result_dict["inception_score"])
+
+
+  result_dict["fid_score"] = ComputeTFGanFIDScore(fake_images, real_images,
+                                                  inception_graph)
   logging.info("Frechet Inception Distance for checkpoint %s is %.3f",
-               checkpoint_path, fid_score)
-  return inception_score, fid_score
+               checkpoint_path, result_dict["fid_score"])
+
+  # For comparison with other papers, for CIFAR dataset compute the FID score
+  # also on the whole training set.
+  if dataset == "cifar10":
+    logging.info("Computing FID score on 50k train set.")
+    train_images = GetRealImages(dataset, "train", 50000)
+    result_dict["fid50k_score"] = ComputeTFGanFIDScore(
+        fake_images, train_images, inception_graph)
+    logging.info("Frechet Inception Distance on 50k for checkpoint %s is %.3f",
+                 checkpoint_path, result_dict["fid50k_score"])
+
+  if ShouldRunMultiscaleSSIM(options):
+    result_dict["ms_ssim"] = ComputeMultiscaleSSIMScore(fake_images)
+    logging.info("MS-SSIM score computed: %.3f", result_dict["ms_ssim"])
+
+  return result_dict, default_value
 
 
 def RunTaskEval(options, task_workdir, inception_graph, out_file="scores.csv"):
   """Evaluates all checkpoints for the given task."""
   # If the output file doesn't exist, create it.
   csv_header = [
-      "checkpoint_path", "model", "dataset",
-      "tf_seed", "inception_score", "fid_score", "sample_id"]
+      "checkpoint_path", "model", "dataset", "tf_seed", "inception_score",
+      "fid_score", "fid50k_score", "ms_ssim_score", "train_accuracy",
+      "test_accuracy", "fake_accuracy", "train_d_loss", "test_d_loss",
+      "sample_id"
+  ]
   train_params = GetAllTrainingParams()
   csv_header.extend(train_params)
 
@@ -242,14 +455,23 @@ def RunTaskEval(options, task_workdir, inception_graph, out_file="scores.csv"):
         continue
 
       # Write the FID score and all training params.
-      inception_score, fid_score = RunCheckpointEval(
+      result_dict, default_value = RunCheckpointEval(
           checkpoint_path, task_workdir, options, inception_graph)
-      logging.info("Fid score: %f", fid_score)
+      logging.info(result_dict)
       tf_seed = str(options.get("tf_seed", -1))
       sample_id = str(options.get("sample_id", -1))
       output_row = [
-          checkpoint_path, options["gan_type"], options["dataset"],
-          tf_seed, "%.3f" % inception_score, "%.3f" % fid_score, sample_id]
+          checkpoint_path, options["gan_type"], options["dataset"], tf_seed,
+          "%.3f" % result_dict.get("inception_score", default_value),
+          "%.3f" % result_dict.get("fid_score", default_value),
+          "%.3f" % result_dict.get("fid50k_score", default_value),
+          "%.3f" % result_dict.get("ms_ssim", default_value),
+          "%.3f" % result_dict.get("train_accuracy", default_value),
+          "%.3f" % result_dict.get("test_accuracy", default_value),
+          "%.3f" % result_dict.get("fake_accuracy", default_value),
+          "%.3f" % result_dict.get("train_d_loss", default_value),
+          "%.3f" % result_dict.get("test_d_loss", default_value), sample_id
+      ]
       for param in train_params:
         if param in options:
           output_row.append(options[param])
@@ -258,3 +480,10 @@ def RunTaskEval(options, task_workdir, inception_graph, out_file="scores.csv"):
       writer.writerow(output_row)
 
       f.flush()
+
+  # Write a "value" file with a final evaluation score.
+  # This score is used to report results to the Vizier service if applicable.
+  data = pd.read_csv(tf.gfile.Open(scores_path), sep=",")
+  min_fid_score = min(data["fid_score"])
+  with tf.gfile.Open(os.path.join(task_workdir, "value"), mode="w") as f:
+    f.write(str(min_fid_score))

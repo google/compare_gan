@@ -23,20 +23,15 @@ import tensorflow as tf
 class LSGAN(AbstractGAN):
   """Least Squares Generative Adversarial Networks."""
 
-  def __init__(self, sess, dataset_content, dataset_parameters,
-               training_parameters, checkpoint_dir, result_dir, log_dir):
+  def __init__(self, dataset_content, parameters, runtime_info):
     super(LSGAN, self).__init__(
         model_name="LSGAN",
-        sess=sess,
         dataset_content=dataset_content,
-        dataset_parameters=dataset_parameters,
-        training_parameters=training_parameters,
-        checkpoint_dir=checkpoint_dir,
-        result_dir=result_dir,
-        log_dir=log_dir)
+        parameters=parameters,
+        runtime_info=runtime_info)
 
     # Number of discriminator iterations per one iteration of the generator.
-    self.disc_iters = training_parameters["disc_iters"]
+    self.disc_iters = parameters["disc_iters"]
 
   def build_model(self, is_training=True):
     image_dims = [self.input_height, self.input_width, self.c_dim]
@@ -72,16 +67,17 @@ class LSGAN(AbstractGAN):
 
     # Divide trainable variables into a group for D and group for G.
     t_vars = tf.trainable_variables()
-    d_vars = [var for var in t_vars if "d_" in var.name]
-    g_vars = [var for var in t_vars if "g_" in var.name]
+    d_vars = [var for var in t_vars if "discriminator" in var.name]
+    g_vars = [var for var in t_vars if "generator" in var.name]
+    self.check_variables(t_vars, d_vars, g_vars)
 
     # Define optimization ops.
     with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
       self.d_optim = tf.train.AdamOptimizer(
-          self.learning_rate, beta1=self.beta1).minimize(
+          self.learning_rate, beta1=self.beta1, name="d_adam").minimize(
               self.d_loss, var_list=d_vars)
       self.g_optim = tf.train.AdamOptimizer(
-          self.learning_rate, beta1=self.beta1).minimize(
+          self.learning_rate, beta1=self.beta1, name="g_adam").minimize(
               self.g_loss, var_list=g_vars)
 
     # Store testing images.

@@ -17,4 +17,4 @@
 
 rm -rf /tmp/results
 compare_gan_generate_tasks --workdir=/tmp/results --experiment=test
-compare_gan_run_one_task --workdir=/tmp/results --task_num=0 --alsologtostderr --dataset_root=/tmp/datasets --num_test_examples=50
+compare_gan_run_one_task --workdir=/tmp/results --task_num=0 --alsologtostderr --dataset_root=/tmp/datasets

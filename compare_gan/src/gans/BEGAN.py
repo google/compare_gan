@@ -17,6 +17,7 @@
 
 from __future__ import division
 
+from compare_gan.src.gans import consts
 from compare_gan.src.gans.abstract_gan import AbstractGAN
 from compare_gan.src.gans.ops import batch_norm, linear, conv2d, deconv2d, lrelu
 import tensorflow as tf
@@ -25,23 +26,18 @@ import tensorflow as tf
 class BEGAN(AbstractGAN):
   """Boundary Equilibrium Generative Adversarial Networks."""
 
-  def __init__(self, sess, dataset_content, dataset_parameters,
-               training_parameters, checkpoint_dir, result_dir, log_dir):
+  def __init__(self, dataset_content, parameters, runtime_info):
     super(BEGAN, self).__init__(
         model_name="BEGAN",
-        sess=sess,
         dataset_content=dataset_content,
-        dataset_parameters=dataset_parameters,
-        training_parameters=training_parameters,
-        checkpoint_dir=checkpoint_dir,
-        result_dir=result_dir,
-        log_dir=log_dir)
+        parameters=parameters,
+        runtime_info=runtime_info)
 
     # Number of discriminator iterations per one iteration of the generator.
-    self.disc_iters = training_parameters["disc_iters"]
+    self.disc_iters = parameters["disc_iters"]
 
-    self.gamma = training_parameters["gamma"]
-    self.lambd = training_parameters["lambda"]
+    self.gamma = parameters["gamma"]
+    self.lambd = parameters["lambda"]
 
   def discriminator(self, x, is_training, reuse=False):
     """BEGAN discriminator (auto-encoder).
@@ -63,28 +59,33 @@ class BEGAN(AbstractGAN):
     """
     height = self.input_height
     width = self.input_width
+    sn = self.discriminator_normalization == consts.SPECTRAL_NORM
     with tf.variable_scope("discriminator", reuse=reuse):
       # Encoding step (Mapping from [bs, h, w, c] to [bs, 64])
-      net = conv2d(x, 64, 4, 4, 2, 2, name="d_conv1")  # [bs, h/2, w/2, 64]
+      net = conv2d(
+          x, 64, 4, 4, 2, 2, name="d_conv1", use_sn=sn)  # [bs, h/2, w/2, 64]
       net = lrelu(net)
-      net = conv2d(net, 128, 4, 4, 2, 2, name="d_conv2")  # [bs, h/4, w/4, 128]
+      net = conv2d(
+          net, 128, 4, 4, 2, 2, name="d_conv2",
+          use_sn=sn)  # [bs, h/4, w/4, 128]
       net = tf.reshape(net, [self.batch_size, -1])  # [bs, h * w * 8]
-      code = linear(net, 64, scope="d_fc6")  # [bs, 64]
-      if self.discriminator_batchnorm:
+      code = linear(net, 64, scope="d_fc6", use_sn=sn)  # [bs, 64]
+      if self.discriminator_normalization == consts.BATCH_NORM:
         code = batch_norm(code, is_training=is_training, scope="d_bn1")
       code = lrelu(code)
 
       # Decoding step (Mapping from [bs, 64] to [bs, h, w, c])
-      net = linear(code, 128 * (height // 4) * (width // 4),
-                   scope="d_fc1")  # [bs, h/4 * w/4 * 128]
-      if self.discriminator_batchnorm:
+      net = linear(
+          code, 128 * (height // 4) * (width // 4), scope="d_fc1",
+          use_sn=sn)  # [bs, h/4 * w/4 * 128]
+      if self.discriminator_normalization == consts.BATCH_NORM:
         net = batch_norm(net, is_training=is_training, scope="d_bn2")
       net = lrelu(net)
       net = tf.reshape(net, [
           self.batch_size, height // 4, width // 4, 128])  # [bs, h/4, w/4, 128]
       net = deconv2d(net, [self.batch_size, height // 2, width // 2, 64],
                      4, 4, 2, 2, name="d_deconv1")  # [bs, h/2, w/2, 64]
-      if self.discriminator_batchnorm:
+      if self.discriminator_normalization == consts.BATCH_NORM:
         net = batch_norm(net, is_training=is_training, scope="d_bn3")
       net = lrelu(net)
       net = deconv2d(net, [self.batch_size, height, width, self.c_dim],
@@ -132,16 +133,17 @@ class BEGAN(AbstractGAN):
 
     # Divide trainable variables into a group for D and a group for G.
     t_vars = tf.trainable_variables()
-    d_vars = [var for var in t_vars if "d_" in var.name]
-    g_vars = [var for var in t_vars if "g_" in var.name]
+    d_vars = [var for var in t_vars if "discriminator" in var.name]
+    g_vars = [var for var in t_vars if "generator" in var.name]
+    self.check_variables(t_vars, d_vars, g_vars)
 
     # Define optimization ops.
     with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
       self.d_optim = tf.train.AdamOptimizer(
-          self.learning_rate, beta1=self.beta1).minimize(
+          self.learning_rate, beta1=self.beta1, name="d_adam").minimize(
               self.d_loss, var_list=d_vars)
       self.g_optim = tf.train.AdamOptimizer(
-          self.learning_rate, beta1=self.beta1).minimize(
+          self.learning_rate, beta1=self.beta1, name="g_adam").minimize(
               self.g_loss, var_list=g_vars)
 
     # Store testing images.
