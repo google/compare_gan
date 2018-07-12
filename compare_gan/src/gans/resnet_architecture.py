@@ -24,7 +24,6 @@ from __future__ import print_function
 
 from math import log
 
-# Dependency imports
 
 from compare_gan.src.gans import consts
 from compare_gan.src.gans import ops
