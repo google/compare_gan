@@ -5,6 +5,10 @@ paper (https://arxiv.org/abs/1711.10337) and in "The GAN Landscape: Losses, Arch
 
 If you want to see the version used only in the first paper - please see the *v1* branch of this repository.
 
+## Pre-trained models
+
+The pre-trained models are available on TensorFlow Hub. Please see [this colab](https://colab.research.google.com/github/google/compare_gan/blob/master/compare_gan/src/tfhub_models.ipynb)
+for an example how to use them.
 
 ### Best hyperparameters
 

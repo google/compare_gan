@@ -442,9 +442,10 @@ def BestModelResnet19():
     # Line 3: FID score: 102.74
     {
       "dataset": "lsun-bedroom",
+      "gan_type": consts.LSGAN_WITH_PENALTY,
       "training_steps": 200000,
       "penalty_type": consts.NO_PENALTY,
-      "learning_rate": 0.000322,
+      "learning_rate": 0.0000322,
       "beta1": 0.5850,
       "beta2": 0.9904,
       "disc_iters": 1,
@@ -457,7 +458,7 @@ def BestModelResnet19():
       "dataset": "lsun-bedroom",
       "training_steps": 200000,
       "penalty_type": consts.NO_PENALTY,
-      "learning_rate": 0.000193,
+      "learning_rate": 0.0000193,
       "beta1": 0.1947,
       "beta2": 0.8819,
       "disc_iters": 1,
@@ -497,6 +498,7 @@ def BestModelResnet19():
     # Line 7: FID score: 41.6
     {
       "dataset": "lsun-bedroom",
+      "gan_type": consts.LSGAN_WITH_PENALTY,
       "training_steps": 200000,
       "penalty_type": consts.NO_PENALTY,
       "learning_rate": 0.0002,
@@ -580,11 +582,12 @@ def BestModelResnet19():
     model.update({
       "architecture": consts.RESNET5_ARCH,
       "batch_size": 64,
-      "gan_type": consts.GAN_WITH_PENALTY,
       "optimizer": "adam",
       "save_checkpoint_steps": 20000,
       "z_dim": 128,
     })
+    if "gan_type" not in model:
+      model.update({"gan_type": consts.GAN_WITH_PENALTY})
 
   return best_models
 
@@ -640,7 +643,7 @@ def BestModelResnetCifar():
       "beta1": 0.5,
       "beta2": 0.999,
       "disc_iters": 5,
-      "discriminator_normalization": consts.NO_NORMALIZATION,
+      "discriminator_normalization": consts.SPECTRAL_NORM,
       "tf_seed": 2,
       "lambda": 1,
     },

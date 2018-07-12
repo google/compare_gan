@@ -398,16 +398,6 @@ def RunCheckpointEval(checkpoint_path, task_workdir, options, inception_graph):
   logging.info("Frechet Inception Distance for checkpoint %s is %.3f",
                checkpoint_path, result_dict["fid_score"])
 
-  # For comparison with other papers, for CIFAR dataset compute the FID score
-  # also on the whole training set.
-  if dataset == "cifar10":
-    logging.info("Computing FID score on 50k train set.")
-    train_images = GetRealImages(dataset, "train", 50000)
-    result_dict["fid50k_score"] = ComputeTFGanFIDScore(
-        fake_images, train_images, inception_graph)
-    logging.info("Frechet Inception Distance on 50k for checkpoint %s is %.3f",
-                 checkpoint_path, result_dict["fid50k_score"])
-
   if ShouldRunMultiscaleSSIM(options):
     result_dict["ms_ssim"] = ComputeMultiscaleSSIMScore(fake_images)
     logging.info("MS-SSIM score computed: %.3f", result_dict["ms_ssim"])
@@ -420,7 +410,7 @@ def RunTaskEval(options, task_workdir, inception_graph, out_file="scores.csv"):
   # If the output file doesn't exist, create it.
   csv_header = [
       "checkpoint_path", "model", "dataset", "tf_seed", "inception_score",
-      "fid_score", "fid50k_score", "ms_ssim_score", "train_accuracy",
+      "fid_score", "ms_ssim_score", "train_accuracy",
       "test_accuracy", "fake_accuracy", "train_d_loss", "test_d_loss",
       "sample_id"
   ]
@@ -464,7 +454,6 @@ def RunTaskEval(options, task_workdir, inception_graph, out_file="scores.csv"):
           checkpoint_path, options["gan_type"], options["dataset"], tf_seed,
           "%.3f" % result_dict.get("inception_score", default_value),
           "%.3f" % result_dict.get("fid_score", default_value),
-          "%.3f" % result_dict.get("fid50k_score", default_value),
           "%.3f" % result_dict.get("ms_ssim", default_value),
           "%.3f" % result_dict.get("train_accuracy", default_value),
           "%.3f" % result_dict.get("test_accuracy", default_value),
