@@ -1,7 +1,7 @@
 ## Compare GAN code.
 
 This is the code that was used in "Are GANs Created Equal? A Large-Scale Study"
-paper (https://arxiv.org/abs/1711.10337) and in "The GAN Landscape: Losses, Architectures, Regularization, and Normalization" (https://openreview.net/pdf?id=SkeFUsQNx7).
+paper (https://arxiv.org/abs/1711.10337) and in "The GAN Landscape: Losses, Architectures, Regularization, and Normalization" (https://arxiv.org/abs/1807.04720).
 
 If you want to see the version used only in the first paper - please see the *v1* branch of this repository.
 
