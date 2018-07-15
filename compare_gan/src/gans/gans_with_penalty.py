@@ -15,6 +15,7 @@
 
 """Implementation of GANs (MMGAN, NSGAN, WGAN) with different regularizers."""
 from __future__ import division
+from __future__ import print_function
 
 from compare_gan.src.gans import consts
 from compare_gan.src.gans import dcgan_architecture
@@ -22,6 +23,11 @@ from compare_gan.src.gans import resnet_architecture
 from compare_gan.src.gans.abstract_gan import AbstractGAN
 
 import tensorflow as tf
+
+try:
+    xrange          # Python 2
+except NameError:
+    xrange = range  # Python 3
 
 flags = tf.flags
 FLAGS = flags.FLAGS
@@ -70,18 +76,18 @@ class AbstractGANWithPenalty(AbstractGAN):
 
   def get_optimizer(self, name_prefix):
     if self.optimizer == "adam":
-      print "Using Adam optimizer."
+      print("Using Adam optimizer.")
       return tf.train.AdamOptimizer(
           self.learning_rate,
           beta1=self.beta1,
           beta2=self.beta2,
           name=name_prefix + self.optimizer)
     elif self.optimizer == "rmsprop":
-      print "Using RMSProp optimizer."
+      print("Using RMSProp optimizer.")
       return tf.train.RMSPropOptimizer(
           self.learning_rate, name=name_prefix + self.optimizer)
     elif self.optimizer == "sgd":
-      print "Using GradientDescent optimizer."
+      print("Using GradientDescent optimizer.")
       return tf.train.GradientDescentOptimizer(self.learning_rate)
     else:
       raise ValueError("Unknown optimizer: %s" % self.optimizer)
@@ -187,7 +193,7 @@ class AbstractGANWithPenalty(AbstractGAN):
     t_vars = tf.trainable_variables()
     d_vars = [var for var in t_vars if "discriminator" in var.name]
     # Linear + conv2d and deconv2d layers.
-    print d_vars
+    print(d_vars)
     d_weights = [
         v for v in d_vars
         if ((v.name.endswith("/Matrix:0") and "fc" in v.name) or
