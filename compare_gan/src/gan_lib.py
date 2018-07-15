@@ -14,6 +14,7 @@
 # limitations under the License.
 
 """Library used for training various flavors of GANs on various datasets."""
+from __future__ import print_function
 
 import collections
 import contextlib
@@ -195,6 +196,6 @@ def run_with_options(options, task_workdir, progress_reporter=None):
             result_dir=result_dir,
             gan_log_dir=gan_log_dir)
         gan.build_model()
-        print " [*] Training started!"
+        print(" [*] Training started!")
         gan.train(sess, progress_reporter)
-        print " [*] Training finished!"
+        print(" [*] Training finished!")

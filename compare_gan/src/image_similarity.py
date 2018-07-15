@@ -39,6 +39,11 @@ from __future__ import print_function
 
 import tensorflow as tf
 
+try:
+    xrange          # Python 2
+except NameError:
+    xrange = range  # Python 3
+
 
 def VerifyCompatibleImageShapes(img1, img2):
   """Checks if two image tensors are compatible for metric computation.

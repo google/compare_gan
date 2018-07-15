@@ -23,6 +23,11 @@ import os
 import numpy as np
 import tensorflow as tf
 
+try:
+    xrange          # Python 2
+except NameError:
+    xrange = range  # Python 3
+
 flags = tf.flags
 FLAGS = flags.FLAGS
 

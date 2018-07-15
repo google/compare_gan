@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from __future__ import division
+from __future__ import print_function
 
 import numpy as np
 import scipy.misc
@@ -138,12 +139,12 @@ def linear(input_,
 
 def spectral_norm_update_ops(var_list, weight_getter):
   update_ops = []
-  print " [*] Spectral norm layers"
+  print(" [*] Spectral norm layers")
   layer = 0
   for var in var_list:
     if weight_getter.match(var.name):
       layer += 1
-      print "     %d. %s" % (layer, var.name)
+      print("     %d. %s" % (layer, var.name))
       # Alternative solution here is keep spectral norm and original weight
       # matrix separately, and only normalize the weight matrix if needed.
       # But as spectral norm converges to 1.0 very quickly, it should be very
