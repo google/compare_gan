@@ -31,10 +31,10 @@ setup(
     package_data={
     },
     scripts=[
-        'bin/compare_gan_generate_tasks',
-        'bin/compare_gan_prepare_datasets.sh',
-        'bin/compare_gan_run_one_task',
-        'bin/compare_gan_run_test.sh',
+        'compare_gan/bin/compare_gan_generate_tasks',
+        'compare_gan/bin/compare_gan_prepare_datasets.sh',
+        'compare_gan/bin/compare_gan_run_one_task',
+        'compare_gan/bin/compare_gan_run_test.sh',
     ],
     install_requires=[
         'future',
