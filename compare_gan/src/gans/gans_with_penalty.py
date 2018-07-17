@@ -24,10 +24,7 @@ from compare_gan.src.gans.abstract_gan import AbstractGAN
 
 import tensorflow as tf
 
-try:
-    xrange          # Python 2
-except NameError:
-    xrange = range  # Python 3
+from builtins import range
 
 flags = tf.flags
 FLAGS = flags.FLAGS
@@ -166,7 +163,7 @@ class AbstractGANWithPenalty(AbstractGAN):
 
   def dragan_penalty(self, x, discriminator, is_training):
     """Returns the DRAGAN gradient penalty."""
-    _, var = tf.nn.moments(x, axes=list(xrange(len(x.get_shape()))))
+    _, var = tf.nn.moments(x, axes=list(range(len(x.get_shape()))))
     std = tf.sqrt(var)
     x_noisy = x + std * (tf.random_uniform(x.shape) - 0.5)
     x_noisy = tf.clip_by_value(x_noisy, 0.0, 1.0)
