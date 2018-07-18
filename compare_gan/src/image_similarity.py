@@ -39,6 +39,8 @@ from __future__ import print_function
 
 import tensorflow as tf
 
+from builtins import range
+
 
 def VerifyCompatibleImageShapes(img1, img2):
   """Checks if two image tensors are compatible for metric computation.
@@ -293,7 +295,7 @@ def _MultiscaleSSIMHelper(
       return [tf.pad(x, padding, mode='SYMMETRIC') for x in images]
 
     mcs = []
-    for k in xrange(len(power_factors)):
+    for k in range(len(power_factors)):
       with tf.name_scope(None, 'Scale%d' % k, imgs):
         if k > 0:
           # Avg pool takes rank 4 tensors. Flatten leading dimensions.

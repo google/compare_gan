@@ -15,6 +15,7 @@
 
 """Implementation of the WGAN algorithm (https://arxiv.org/abs/1701.07875)."""
 from __future__ import division
+from __future__ import print_function
 
 from compare_gan.src.gans.abstract_gan import AbstractGAN
 import tensorflow as tf
@@ -39,13 +40,13 @@ class WGAN(AbstractGAN):
 
   def get_optimizer(self, name_prefix):
     if self.optimizer == "adam":
-      print "Using Adam optimizer."
+      print("Using Adam optimizer.")
       return tf.train.AdamOptimizer(
           self.learning_rate,
           beta1=self.beta1,
           name=name_prefix + self.optimizer)
     elif self.optimizer == "rmsprop":
-      print "Using RMSProp optimizer."
+      print("Using RMSProp optimizer.")
       return tf.train.RMSPropOptimizer(
           self.learning_rate, name=name_prefix + self.optimizer)
     else:
