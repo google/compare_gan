@@ -23,6 +23,8 @@ import os
 import numpy as np
 import tensorflow as tf
 
+from builtins import range
+
 flags = tf.flags
 FLAGS = flags.FLAGS
 
@@ -83,7 +85,7 @@ def get_sharded_filenames(prefix, num_shards, range_start=0, range_end=None):
   return [
       os.path.join(FLAGS.dataset_root,
                    prefix + "-%05d-of-%05d" % (i, num_shards))
-      for i in xrange(range_start, range_end)
+      for i in range(range_start, range_end)
   ]
 
 
