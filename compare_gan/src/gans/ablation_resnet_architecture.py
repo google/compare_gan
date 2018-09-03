@@ -13,9 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A GAN architecture with residual blocks and skip connections.
+"""This file is only used for ablation study for Resnet.
 
-This implementation is based on Spectral Norm implementation.
+Don't use this implementation in other experiments.
 """
 
 from __future__ import absolute_import
@@ -196,7 +196,8 @@ def resnet5_generator(noise,
                       is_training,
                       reuse=None,
                       colors=3,
-                      output_shape=128):
+                      output_shape=128,
+                      unused_ablation_type=""):
   # Input is a noise tensor of shape [bs, z_dim]
   assert len(noise.get_shape().as_list()) == 2
 
@@ -254,7 +255,8 @@ def resnet5_generator(noise,
 def resnet5_discriminator(inputs,
                           is_training,
                           discriminator_normalization,
-                          reuse=None):
+                          reuse=None,
+                          unused_ablation_type=""):
   """ResNet style discriminator.
 
   Construct discriminator network from inputs to the final endpoint.
@@ -266,6 +268,7 @@ def resnet5_discriminator(inputs,
     discriminator_normalization: which type of normalization to apply.
     reuse: Whether or not the network variables should be reused. `scope`
       must be given to be reused.
+    unused_ablation_type: str, which type of ablation to apply.
 
   Returns:
     out: The prediction of the discrminator (in [0, 1]). Shape: [bs, 1]
@@ -313,258 +316,3 @@ def resnet5_discriminator(inputs,
     return out, out_logit, None
 
 
-# Generates resolution 32x32, same architecture as in SN-GAN paper, Table 4,
-# page 17.
-def resnet_cifar_generator(noise,
-                           is_training,
-                           reuse=None,
-                           colors=3):
-  batch_size = noise.get_shape().as_list()[0]
-  with tf.variable_scope("generator", reuse=reuse):
-    # Map noise to the actual seed.
-    output = ops.linear(
-        noise, 4 * 4 * 256, scope="fc_noise")
-
-    # Reshape the seed to be a rank-4 Tensor.
-    output = tf.reshape(
-        output, [batch_size, 4, 4, 256], name="fc_reshaped")
-
-    for block_idx in range(3):
-      block_scope = "B%d" % (block_idx + 1)
-      output = generator_block(output, in_channels=256,
-                               out_channels=256,
-                               scale="up", block_scope=block_scope,
-                               is_training=is_training, reuse=reuse)
-
-    # Final processing of the output.
-    output = batch_norm_resnet(
-        output, is_training=is_training, scope="final_norm")
-    output = tf.nn.relu(output)
-    output = ops.conv2d(
-        output, output_dim=colors, k_h=3, k_w=3, d_h=1, d_w=1,
-        name="final_conv")
-    output = tf.nn.sigmoid(output)
-
-    print ("Generator output shape: ", output)
-    return output
-
-
-def resnet_cifar_discriminator(inputs,
-                               is_training,
-                               discriminator_normalization,
-                               reuse=None):
-  _validate_image_inputs(inputs)
-  colors = inputs.get_shape().as_list()[-1]
-  assert colors in [1, 3]
-
-  with tf.variable_scope("discriminator", values=[inputs], reuse=reuse):
-    output = inputs
-    channels = colors
-
-    for block_idx in range(4):
-      block_scope = "B%d" % block_idx
-      scale = "down" if block_idx <= 1 else "none"
-      output = discriminator_block(
-          output, in_channels=channels, out_channels=128,
-          scale=scale, block_scope=block_scope,
-          is_training=is_training, reuse=reuse,
-          discriminator_normalization=discriminator_normalization)
-      channels = 128
-
-    # Final part - ReLU
-    output = tf.nn.relu(output)
-    # Global sum pooling (it's actually "mean" here, as that's what they had in
-    # their implementation for resnet5). There was no implementation for Cifar.
-    pre_logits = tf.reduce_mean(output, axis=[1, 2])
-    # dense -> 1
-    use_sn = discriminator_normalization == consts.SPECTRAL_NORM
-    out_logit = ops.linear(pre_logits, 1, scope="disc_final_fc", use_sn=use_sn)
-    out = tf.nn.sigmoid(out_logit)
-    return out, out_logit, None
-
-
-# Generates resolution 48*48, same architecture as in SN-GAN paper, Table 5,
-# page 17.
-def resnet_stl_generator(noise, is_training, reuse=None, colors=3):
-  batch_size = noise.get_shape().as_list()[0]
-  with tf.variable_scope("generator", reuse=reuse):
-    # Map noise to the actual seed.
-    output = ops.linear(noise, 6 * 6 * 512, scope="fc_noise")
-
-    # Reshape the seed to be a rank-4 Tensor.
-    output = tf.reshape(output, [batch_size, 6, 6, 512], name="fc_reshaped")
-
-    ch = 64
-    # in/out channel numbers copied from SN paper.
-    magic = [(8, 4), (4, 2), (2, 1)]
-    for block_idx in range(3):
-      block_scope = "B%d" % (block_idx + 1)
-      in_channels = ch * magic[block_idx][0]
-      out_channels = ch * magic[block_idx][1]
-      output = generator_block(
-          output,
-          in_channels=in_channels,
-          out_channels=out_channels,
-          scale="up",
-          block_scope=block_scope,
-          is_training=is_training,
-          reuse=reuse)
-
-    # Final processing of the output.
-    output = batch_norm_resnet(
-        output, is_training=is_training, scope="final_norm")
-    output = tf.nn.relu(output)
-    output = ops.conv2d(
-        output,
-        output_dim=colors,
-        k_h=3,
-        k_w=3,
-        d_h=1,
-        d_w=1,
-        name="final_conv")
-    output = tf.nn.sigmoid(output)
-
-    print("Generator output shape: ", output)
-    return output
-
-
-def resnet_stl_discriminator(inputs,
-                             is_training,
-                             discriminator_normalization,
-                             reuse=None):
-  _validate_image_inputs(inputs, validate_power2=False)
-  colors = inputs.get_shape().as_list()[-1]
-  assert colors in [1, 3]
-
-  ch = 64
-  with tf.variable_scope("discriminator", values=[inputs], reuse=reuse):
-    output = discriminator_block(
-        inputs,
-        in_channels=colors,
-        out_channels=ch,
-        scale="down",
-        block_scope="B0",
-        is_training=is_training,
-        reuse=reuse,
-        discriminator_normalization=discriminator_normalization)
-
-    # in/out channel numbers copied from SN paper.
-    magic = [(1, 2), (2, 4), (4, 8), (8, 16)]
-    for block_idx in range(4):
-      block_scope = "B%d" % (block_idx + 1)
-      in_channels = ch * magic[block_idx][0]
-      out_channels = ch * magic[block_idx][1]
-      print("Resnet5 disc, block %d in=%d out=%d" % (block_idx, in_channels,
-                                                     out_channels))
-
-      if block_idx < 3:
-        scale = "down"
-      else:
-        scale = "none"
-      output = discriminator_block(
-          output,
-          in_channels=in_channels,
-          out_channels=out_channels,
-          scale=scale,
-          block_scope=block_scope,
-          is_training=is_training,
-          reuse=reuse,
-          discriminator_normalization=discriminator_normalization)
-
-    # Final part
-    output = tf.nn.relu(output)
-    pre_logits = tf.reduce_mean(output, axis=[1, 2])
-
-    use_sn = discriminator_normalization == consts.SPECTRAL_NORM
-    out_logit = ops.linear(pre_logits, 1, scope="disc_final_fc", use_sn=use_sn)
-    out = tf.nn.sigmoid(out_logit)
-    return out, out_logit, None
-
-
-# Resnet-107, trying to be as similar as possible to Resnet-101 in
-# https://github.com/igul222/improved_wgan_training/blob/master/gan_64x64.py
-# (the difference comes from the fact that the Resnet-101 generates 64x64
-# and we need 128x128, while keeping similar number of resnet blocks).
-def resnet107_generator(noise, is_training, reuse=None, colors=3):
-  # Input is a noise tensor of shape [bs, z_dim]
-  assert len(noise.get_shape().as_list()) == 2
-
-  # Calculate / define a few numbers.
-  batch_size = noise.get_shape().as_list()[0]
-  ch = 64
-
-  with tf.variable_scope("generator", reuse=reuse):
-    # Map noise to the actual seed.
-    output = ops.linear(noise, 4 * 4 * 8 * ch, scope="fc_noise")
-
-    # Reshape the seed to be a rank-4 Tensor.
-    output = tf.reshape(output, [batch_size, 4, 4, 8 * ch], name="fc_reshaped")
-
-    in_channels = 8 * ch
-    out_channels = 4 * ch
-    for superblock in range(6):
-      for i in range(5):
-        block_scope = "B_%d_%d" % (superblock, i)
-        output = generator_block(
-            output, in_channels=in_channels, out_channels=in_channels,
-            scale="none", block_scope=block_scope, is_training=is_training,
-            reuse=reuse)
-      # We want to upscale 5 times.
-      if superblock < 5:
-        output = generator_block(
-            output, in_channels=in_channels, out_channels=out_channels,
-            scale="up", block_scope="B_%d_up" % superblock,
-            is_training=is_training, reuse=reuse)
-      in_channels /= 2
-      out_channels /= 2
-
-    output = ops.conv2d(
-        output, output_dim=colors, k_h=3, k_w=3, d_h=1, d_w=1,
-        name="final_conv")
-    output = tf.nn.sigmoid(output)
-
-    print ("Generator output shape: ", output)
-    return output
-
-
-def resnet107_discriminator(inputs,
-                            is_training,
-                            discriminator_normalization,
-                            reuse=None):
-  _validate_image_inputs(inputs)
-  colors = inputs.get_shape().as_list()[-1]
-  assert colors in [1, 3]
-
-  ch = 64
-
-  with tf.variable_scope("discriminator", values=[inputs], reuse=reuse):
-    output = ops.conv2d(
-        inputs, output_dim=ch // 4, k_h=3, k_w=3, d_h=1, d_w=1,
-        name="color_conv")
-    in_channels = ch // 4
-    out_channels = ch // 2
-    for superblock in range(6):
-      for i in range(5):
-        block_scope = "B_%d_%d" % (superblock, i)
-        output = discriminator_block(
-            output, in_channels=in_channels, out_channels=in_channels,
-            scale="none", block_scope=block_scope, is_training=is_training,
-            reuse=reuse,
-            discriminator_normalization=discriminator_normalization)
-      # We want to downscale 5 times.
-      if superblock < 5:
-        output = discriminator_block(
-            output, in_channels=in_channels, out_channels=out_channels,
-            scale="down", block_scope="B_%d_up" % superblock,
-            is_training=is_training, reuse=reuse,
-            discriminator_normalization=discriminator_normalization)
-      in_channels *= 2
-      out_channels *= 2
-
-    # Final part
-    output = tf.reshape(output, [-1, 4 * 4 * 8 * ch])
-    use_sn = discriminator_normalization == consts.SPECTRAL_NORM
-    out_logit = ops.linear(output, 1, scope="disc_final_fc", use_sn=use_sn)
-    out = tf.nn.sigmoid(out_logit)
-
-    return out, out_logit, None

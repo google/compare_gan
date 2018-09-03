@@ -17,10 +17,14 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
+
 import collections
 import copy
 import os
+
 from compare_gan.src import simple_task_pb2
+
+import six
 import tensorflow as tf
 from google.protobuf import text_format
 
@@ -64,7 +68,7 @@ def UnrollCalls(function, kwargs):
     b x c in [2,4] x [5, 6].
   """
   res = []
-  for key, value in sorted(kwargs.iteritems()):
+  for key, value in sorted(six.iteritems(kwargs)):
     assert not isinstance(key, tuple)
     if isinstance(value, list):
       for v in value:
@@ -104,7 +108,7 @@ def MakeDimensions(dim_dict, extra_dims=None, base_task=None):
     dim_dict = copy.copy(dim_dict)
     dim_dict.update(extra_dims)
   dim_dict = collections.OrderedDict(sorted(dim_dict.items()))
-  for key, value in dim_dict.iteritems():
+  for key, value in six.iteritems(dim_dict):
     if key in ("_proto", "_prefix"):
       # We skip the special keys.
       continue

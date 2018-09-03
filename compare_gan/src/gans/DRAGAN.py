@@ -14,9 +14,12 @@
 # limitations under the License.
 
 """Implementation of the DRAGAN algorithm (https://arxiv.org/abs/1705.07215)."""
+from __future__ import absolute_import
 from __future__ import division
+from __future__ import print_function
 
 from compare_gan.src.gans.abstract_gan import AbstractGAN
+
 import numpy as np
 import tensorflow as tf
 
@@ -24,18 +27,11 @@ import tensorflow as tf
 class DRAGAN(AbstractGAN):
   """How to Train Your DRAGAN."""
 
-  def __init__(self, dataset_content, parameters, runtime_info):
-    super(DRAGAN, self).__init__(
-        model_name="DRAGAN",
-        dataset_content=dataset_content,
-        parameters=parameters,
-        runtime_info=runtime_info)
-
-    # Number of discriminator iterations per one iteration of the generator.
-    self.disc_iters = parameters["disc_iters"]
+  def __init__(self, **kwargs):
+    super(DRAGAN, self).__init__("DRAGAN", **kwargs)
 
     # Higher value: more stable, but slower convergence.
-    self.lambd = parameters["lambda"]
+    self.lambd = self.parameters["lambda"]
 
   def get_perturbed_batch(self, minibatch):
     return minibatch + 0.5 * minibatch.std() * np.random.random(minibatch.shape)
@@ -117,9 +113,10 @@ class DRAGAN(AbstractGAN):
     self.g_sum = tf.summary.merge([d_loss_fake_sum, g_loss_sum])
     self.d_sum = tf.summary.merge([d_loss_real_sum, d_loss_sum])
 
-  def discriminator_feed_dict(self, batch_images, batch_z):
+  def discriminator_feed_dict(self, features, labels):
+    del labels
     return {
-        self.inputs: batch_images,
-        self.inputs_p: self.get_perturbed_batch(batch_images),
-        self.z: batch_z
+        self.inputs: features["images"],
+        self.inputs_p: self.get_perturbed_batch(features["images"]),
+        self.z: features["z_for_disc_step"],
     }

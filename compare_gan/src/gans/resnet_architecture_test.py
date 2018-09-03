@@ -20,6 +20,7 @@ from __future__ import division
 from __future__ import print_function
 
 from compare_gan.src.gans import resnet_architecture as resnet_arch
+
 import tensorflow as tf
 
 

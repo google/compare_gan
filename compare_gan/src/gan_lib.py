@@ -14,6 +14,9 @@
 # limitations under the License.
 
 """Library used for training various flavors of GANs on various datasets."""
+
+from __future__ import absolute_import
+from __future__ import division
 from __future__ import print_function
 
 import collections
@@ -36,6 +39,7 @@ from compare_gan.src.gans.WGAN import WGAN
 from compare_gan.src.gans.WGAN_GP import WGAN_GP
 
 import numpy as np
+from six.moves import range
 import tensorflow as tf
 
 
@@ -68,6 +72,11 @@ flags = tf.flags
 FLAGS = flags.FLAGS
 logging = tf.logging
 
+flags.DEFINE_string("master", "local",
+                    "Estimator only: BNS name of the TensorFlow master to use.")
+flags.DEFINE_integer("iterations_per_loop", 1000,
+                     "TPU only: Number of iterations per TPU training loop.")
+
 flags.DEFINE_integer("data_reading_num_threads", 4,
                      "The number of threads used to read the dataset.")
 flags.DEFINE_integer("data_reading_buffer_bytes", 128 * 1024,
@@ -92,8 +101,10 @@ def load_dataset(dataset_name,
   if dataset_name not in DATASETS:
     raise ValueError("Dataset %s is not available." % dataset_name)
 
-  return DATASETS[dataset_name](dataset_name, split_name, num_threads,
-                                buffer_size)
+  return DATASETS[dataset_name](dataset_name,
+                                split_name=split_name,
+                                num_threads=num_threads,
+                                buffer_size=buffer_size)
 
 
 def create_gan(gan_type, dataset, dataset_content, options,
@@ -121,12 +132,12 @@ def create_gan(gan_type, dataset, dataset_content, options,
   assert parameters["save_checkpoint_steps"] >= 1, (
       "The number of steps per eval should be positive")
   assert parameters["batch_size"] >= 1, "Batch size has to be positive."
-  assert parameters["z_dim"] >= 1, ("Number of latent dimensions has to be"
-                                         " positive.")
+  assert parameters["z_dim"] >= 1, ("Number of latent dimensions has to be "
+                                    "positive.")
 
   # Runtime settings for GANs.
   runtime_info = collections.namedtuple(
-          'RuntimeInfo', ['checkpoint_dir', 'result_dir', 'log_dir'])
+      'RuntimeInfo', ['checkpoint_dir', 'result_dir', 'log_dir'])
 
   runtime_info.checkpoint_dir = checkpoint_dir
   runtime_info.result_dir = result_dir
@@ -142,14 +153,29 @@ def create_gan(gan_type, dataset, dataset_content, options,
 def profile_context(tfprofile_dir):
   if "enable_tf_profile" in FLAGS and FLAGS.enable_tf_profile:
     with tf.contrib.tfprof.ProfileContext(
-        tfprofile_dir, trace_steps=range(100, 200, 1), dump_steps=[200]):
+        tfprofile_dir, trace_steps=list(range(100, 200, 1)), dump_steps=[200]):
       yield
   else:
     yield
 
 
-def run_with_options(options, task_workdir, progress_reporter=None):
-  """Runs the task with arbitrary options."""
+def run_with_options(options, task_workdir, progress_reporter=None,
+                     warm_start_from=None):
+  """Runs the task with arbitrary options.
+
+  Args:
+    options: Dictionary with meta and hyper parameters.
+    task_workdir: Directory to save logs, checkpoints, samples etc. If the
+        subdirectory "checkpoint" contains checkpoints the method will attempt
+        to load the latest checkpoint.
+    progress_reporter: Callback function to report progress (parameters:
+        step, steps_per_sec, progress, eta_minutes).
+    warm_start_from: `tf.estimator.WarmStartSettings`. Only supported for
+        estimator training.
+
+  Raises:
+    ValueError: For infeasible combinations of options.
+  """
   checkpoint_dir = os.path.join(task_workdir, "checkpoint")
   tfprofile_dir = os.path.join(task_workdir, "tfprofile")
   result_dir = os.path.join(task_workdir, "result")
@@ -168,6 +194,10 @@ def run_with_options(options, task_workdir, progress_reporter=None):
   ops.check_folder(result_dir)
   ops.check_folder(gan_log_dir)
 
+  if "tf_seed" in options:
+    logging.info("Setting np random seed to %s", options["tf_seed"])
+    np.random.seed(options["tf_seed"])
+
   # Set the dataset shuffling seed if specified in options.
   dataset_seed = DEFAULT_DATASET_SEED
   if "dataset_seed" in options:
@@ -175,27 +205,52 @@ def run_with_options(options, task_workdir, progress_reporter=None):
     dataset_seed = options["dataset_seed"]
 
   dataset_content = load_dataset(dataset, split_name="train")
-  dataset_content = dataset_content.repeat().shuffle(
-      10000, seed=dataset_seed)
+  dataset_content = dataset_content.repeat().shuffle(10000, seed=dataset_seed)
 
-  with tf.Graph().as_default():
-    if "tf_seed" in options:
-      seed = options["tf_seed"]
-      logging.info("Setting tf and np random seed to %d", seed)
-      tf.set_random_seed(seed)
-      np.random.seed(seed)
-
-    with profile_context(tfprofile_dir):
-      with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
-        gan = create_gan(
-            gan_type=gan_type,
-            dataset=dataset,
-            dataset_content=dataset_content,
-            options=options,
-            checkpoint_dir=checkpoint_dir,
-            result_dir=result_dir,
-            gan_log_dir=gan_log_dir)
-        gan.build_model()
-        print(" [*] Training started!")
-        gan.train(sess, progress_reporter)
-        print(" [*] Training finished!")
+  if options.get("use_estimator", options.get("use_tpu", False)):
+    # Estimator mode supports CPU, GPU and TPU training.
+    gan = create_gan(
+        gan_type=gan_type,
+        dataset=dataset,
+        dataset_content=dataset_content,
+        options=options,
+        gan_log_dir=gan_log_dir,
+        result_dir=result_dir,
+        checkpoint_dir=checkpoint_dir)
+    config = tf.contrib.tpu.RunConfig(
+        model_dir=checkpoint_dir,
+        tf_random_seed=options.get("tf_seed", None),
+        save_checkpoints_steps=int(options["save_checkpoint_steps"]),
+        keep_checkpoint_max=gan.max_checkpoints_to_keep,
+        master=FLAGS.master,
+        evaluation_master=FLAGS.master,
+        tpu_config=tf.contrib.tpu.TPUConfig(
+            iterations_per_loop=FLAGS.iterations_per_loop))
+    print(" [*] Training started!")
+    gan.train_with_estimator(config=config, warm_start_from=warm_start_from)
+    print(" [*] Training finished!")
+  else:
+    if options.get("use_tpu", False):
+      raise ValueError("TPU experiments must run with use_estimator=True.")
+    if warm_start_from:
+      raise ValueError("Warm starting is only supported for estimator.")
+    with tf.Graph().as_default():
+      if "tf_seed" in options:
+        logging.info("Setting tf random seed to %s", options["tf_seed"])
+        tf.set_random_seed(options["tf_seed"])
+        # NumPy random seed is already set above.
+      with profile_context(tfprofile_dir):
+        config = tf.ConfigProto(allow_soft_placement=True)
+        with tf.Session(config=config) as sess:
+          gan = create_gan(
+              gan_type=gan_type,
+              dataset=dataset,
+              dataset_content=dataset_content,
+              options=options,
+              checkpoint_dir=checkpoint_dir,
+              result_dir=result_dir,
+              gan_log_dir=gan_log_dir)
+          gan.build_model()
+          print(" [*] Training started!")
+          gan.train(sess, progress_reporter)
+          print(" [*] Training finished!")

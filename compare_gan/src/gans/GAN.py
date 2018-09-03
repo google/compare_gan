@@ -14,24 +14,20 @@
 # limitations under the License.
 
 """Implementation of the MM-GAN and NS-GAN (https://arxiv.org/abs/1406.2661)."""
+from __future__ import absolute_import
 from __future__ import division
+from __future__ import print_function
 
 from compare_gan.src.gans.abstract_gan import AbstractGAN
+
 import tensorflow as tf
 
 
 class ClassicGAN(AbstractGAN):
   """Original Generative Adverserial Networks."""
 
-  def __init__(self, dataset_content, parameters, runtime_info, model_name):
-    super(ClassicGAN, self).__init__(
-        model_name=model_name,
-        dataset_content=dataset_content,
-        parameters=parameters,
-        runtime_info=runtime_info)
-
-    # Number of discriminator iterations per one iteration of the generator.
-    self.disc_iters = parameters["disc_iters"]
+  def __init__(self, model_name, **kwargs):
+    super(ClassicGAN, self).__init__(model_name, **kwargs)
 
   def build_model(self, is_training=True):
     image_dims = [self.input_height, self.input_width, self.c_dim]
@@ -109,12 +105,8 @@ class GAN(ClassicGAN):
      G_loss = -log(D(fake_images))  [maximizes log(D)]
   """
 
-  def __init__(self, dataset_content, parameters, runtime_info):
-    super(GAN, self).__init__(
-        dataset_content=dataset_content,
-        parameters=parameters,
-        runtime_info=runtime_info,
-        model_name="GAN")
+  def __init__(self, **kwargs):
+    super(GAN, self).__init__(model_name="GAN", **kwargs)
 
 
 class GAN_MINMAX(ClassicGAN):
@@ -125,9 +117,5 @@ class GAN_MINMAX(ClassicGAN):
             = log (1 - D(fake_images))   [ minimize log (1 - D) ]
   """
 
-  def __init__(self, dataset_content, parameters, runtime_info):
-    super(GAN_MINMAX, self).__init__(
-        dataset_content=dataset_content,
-        parameters=parameters,
-        runtime_info=runtime_info,
-        model_name="GAN_MINMAX")
+  def __init__(self, **kwargs):
+    super(GAN_MINMAX, self).__init__(model_name="GAN_MINMAX", **kwargs)

@@ -13,7 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import absolute_import
 from __future__ import division
+from __future__ import print_function
 
 
 GAN_WITH_PENALTY = "GAN_PENALTY"
@@ -43,8 +45,9 @@ SNDCGAN_ARCH = "sndcgan_arch"
 RESNET_CIFAR = "resnet_cifar_arch"
 RESNET_STL = "resnet_stl_arch"
 RESNET107_ARCH = "resnet107_arch"
+RESNET5_ABLATION = "resnet5_ablation"  # Only to compare changes in Resnet.
 ARCHITECTURES = [INFOGAN_ARCH, DCGAN_ARCH, RESNET_CIFAR, SNDCGAN_ARCH,
-                 RESNET5_ARCH, RESNET107_ARCH, RESNET_STL]
+                 RESNET5_ARCH, RESNET107_ARCH, RESNET_STL, RESNET5_ABLATION]
 
 # This will be used when checking that the regularization was applied
 # on a correct number of layers. Currently used only for L2 regularization.
@@ -56,4 +59,5 @@ N_DISCRIMINATOR_LAYERS = {
     RESNET_CIFAR: 13,
     RESNET5_ARCH: 19,
     RESNET107_ARCH: 107,
+    RESNET5_ABLATION: 19,
 }

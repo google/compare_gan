@@ -14,29 +14,25 @@
 # limitations under the License.
 
 """Implementation of the WGAN algorithm (https://arxiv.org/abs/1701.07875)."""
+from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
 from compare_gan.src.gans.abstract_gan import AbstractGAN
+
 import tensorflow as tf
 
 
 class WGAN(AbstractGAN):
   """Wasserstein GAN."""
 
-  def __init__(self, dataset_content, parameters, runtime_info):
-    super(WGAN, self).__init__(
-        model_name="WGAN",
-        dataset_content=dataset_content,
-        parameters=parameters,
-        runtime_info=runtime_info)
+  def __init__(self, **kwargs):
+    super(WGAN, self).__init__("WGAN", **kwargs)
 
-    # Number of discriminator iterations per one iteration of the generator.
-    self.disc_iters = parameters["disc_iters"]
-    self.clip = parameters["weight_clipping"]
+    self.clip = self.parameters["weight_clipping"]
     # If the optimizer wasn't specified, use Adam to be consistent with
     # other GANs.
-    self.optimizer = parameters.get("optimizer", "adam")
+    self.optimizer = self.parameters.get("optimizer", "adam")
 
   def get_optimizer(self, name_prefix):
     if self.optimizer == "adam":

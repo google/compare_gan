@@ -19,9 +19,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import math
+from contextlib import contextmanager
 import os
-import re
 import time
 
 from compare_gan.src.gans import consts
@@ -29,17 +28,23 @@ from compare_gan.src.gans import ops
 from compare_gan.src.gans.ops import lrelu, batch_norm, linear, conv2d, deconv2d
 
 import numpy as np
+from six.moves import range
 import tensorflow as tf
 
 flags = tf.flags
 FLAGS = flags.FLAGS
+
+PREFETCH_NUM_BATCHES = 32
 
 
 class AbstractGAN(object):
   """Base class for all GANs."""
 
   def __init__(self, model_name, dataset_content, parameters, runtime_info):
+    super(AbstractGAN, self).__init__()
     self.model_name = model_name
+    self.parameters = parameters
+    self.use_tpu = parameters.get("use_tpu", False)
 
     # Initialize training-specific parameters.
     self.training_steps = int(parameters["training_steps"])
@@ -69,6 +74,19 @@ class AbstractGAN(object):
     self.dataset_name = parameters["dataset_name"]
     self.dataset_content = dataset_content
 
+    # Number of discriminator iterations per one iteration of the generator.
+    self.disc_iters = parameters.get("disc_iters", 1)
+    self.unroll_disc_iters = parameters.get("unroll_disc_iters", self.use_tpu)
+
+  @property
+  def num_sub_steps(self):
+    # To support disc_iters > 1 for TPU we unroll the graph to train
+    # multiple sub steps in one mini-batch. Each mini-batch will do
+    # self.disc_iters sub steps, each training the discriminator and increases
+    # global_step by one. After the last step we train the generator once.
+    if self.unroll_disc_iters:
+      return self.disc_iters
+    return 1
 
   def discriminator(self, x, is_training, reuse=False):
     """Discriminator architecture based on InfoGAN.
@@ -219,19 +237,32 @@ class AbstractGAN(object):
     full_path = os.path.join(out_folder, filename_suffix)
     ops.save_images(samples, full_path)
 
-  def after_training_step_hook(self, sess, batch_images, batch_z, counter):
+  def after_training_step_hook(self, sess, features, counter):
     # Called after the training step. (used by BEGAN).
     pass
 
   def resample_before_generator(self):
     return False
 
-  def discriminator_feed_dict(self, batch_images, batch_z):
-    return {self.inputs: batch_images, self.z: batch_z}
+  def discriminator_feed_dict(self, features, labels):
+    """Returns the feed_dict for discriminator training step."""
+    del labels
+    return {
+        self.inputs: features["images"],
+        self.z: features["z_for_disc_step"],
+    }
+
+  def generator_feed_dict(self, features, labels):
+    """Returns the feed_dict for generator training step."""
+    # If self.resample_before_generator() returns True
+    # features["z_for_disc_step"] and features["z_for_gen_step"] will be the
+    # same.
+    del labels
+    return {self.z: features["z_for_gen_step"]}
 
   def z_generator(self, batch_size, z_dim):
     """Returns the z-generator as numpy. Used during training."""
-    return np.random.uniform(-1, 1, size=(batch_size, z_dim))
+    return np.random.uniform(-1, 1, size=(batch_size, z_dim)).astype(np.float32)
 
   def z_tf_generator(self, batch_size, z_dim, name=None):
     """Returns the z-generator as TF op.
@@ -246,29 +277,125 @@ class AbstractGAN(object):
     Returns:
       Tensor object.
     """
+
     return tf.random_uniform(
         (batch_size, z_dim), minval=-1.0, maxval=1.0, name=name)
 
-  def run_single_train_step(self, batch_images, batch_z, counter, g_loss, sess):
+  def run_single_train_step(self, features, counter, g_loss, sess):
     """Runs a single training step."""
 
     # Update the discriminator network.
     _, summary_str, d_loss = sess.run(
         [self.d_optim, self.d_sum, self.d_loss],
-        feed_dict=self.discriminator_feed_dict(batch_images, batch_z))
+        feed_dict=self.discriminator_feed_dict(features, labels=None))
     self.writer.add_summary(summary_str, counter)
 
     # Update the generator network.
     if (counter - 1) % self.disc_iters == 0 or g_loss is None:
-      if self.resample_before_generator():
-        batch_z = np.random.uniform(
-            -1, 1, [self.batch_size, self.z_dim]).astype(np.float32)
       _, summary_str, g_loss = sess.run(
-          [self.g_optim, self.g_sum, self.g_loss], feed_dict={self.z: batch_z})
+          [self.g_optim, self.g_sum, self.g_loss],
+          feed_dict=self.generator_feed_dict(features, labels=None))
       self.writer.add_summary(summary_str, counter)
 
-    self.after_training_step_hook(sess, batch_images, batch_z, counter)
+    self.after_training_step_hook(sess, features, counter)
     return d_loss, g_loss
+
+  @contextmanager
+  def _different_batch_size(self, batch_size):
+    """Context to temporary change the batch size in self.batch_size.
+
+    This is useful for TPUs where
+    self.batch_size = num_tpu_cores * batch_size_per_core.
+    The input pipeline will create batches of size self.batch_size but the
+    subgraph for the model needs to be constructed with batch_size_per_core.
+
+    Args:
+      batch_size: Batch size to set self.batch_size for within the context.
+    Yields:
+      Context with self.batch_size set to batch_size.
+    """
+    original_batch_size = self.batch_size
+    self.batch_size = batch_size
+    try:
+      yield
+    finally:
+      self.batch_size = original_batch_size
+
+  def _input_fn(self, params):
+    """Input_fn for Estimator training."""
+
+    del params
+    # If self.unroll_disc_iters is True we need to pack multiple mini-batches
+    # (one per disc_iters) into one batch. Unrolling the discriminator
+    # iterations is workaround until tf.cond is fully supported on TPUs.
+    with self._different_batch_size(self.batch_size * self.num_sub_steps):
+      dataset = self.dataset_content.batch(self.batch_size)
+      dataset = dataset.prefetch(PREFETCH_NUM_BATCHES)
+      images, _ = dataset.make_one_shot_iterator().get_next()
+      # TPUs require known shapes everywhere.
+      images = tf.to_float(tf.reshape(
+          images,
+          [self.batch_size, self.input_height, self.input_width, self.c_dim]))
+      z = self.z_tf_generator(self.batch_size, self.z_dim,
+                              name="z_for_disc_step")
+      features = {
+          "images": images,
+          "z_for_disc_step": z,
+      }
+      # Some models resample the noise before training the generator. Therefore
+      # our mini-batch contains noise for both discriminator and generator.
+      # For models that don't resample both are the same.
+      if self.resample_before_generator():
+        features["z_for_gen_step"] = self.z_tf_generator(
+            self.batch_size, self.z_dim, name="z_for_gen_step")
+      else:
+        features["z_for_gen_step"] = tf.identity(z, name="z_for_gen_step")
+      return features, None
+
+  def _model_fn(self, features, labels, mode, params):
+    """Constructs the model for the given features and mode.
+
+    Args:
+      features: A dictionary with the feature tensors. See the _input_fn()
+          for the set of features.
+      labels: Tensor will labels. None for the implementation of _input_fn()
+          above. Will be None if mode is PREDICT.
+      mode: `tf.estimator.ModeKeys` value (TRAIN, EVAL, PREDICT). The mode
+          should be passed to the TPUEstimatorSpec and your model should be
+          build this mode.
+      params: Dictionary with hyper parameters. We currently do not use this,
+          but TPUEstimator will set the desired batch_size. You can use
+          _different_batch_size to temporary override self.batch_size.
+
+    Returns:
+      A `tf.contrib.tpu.TPUEstimatorSpec`.
+    """
+    raise NotImplementedError(
+        "_model_fn() must be implemented in subclasses of AbstractGAN.")
+
+  def train_with_estimator(self, config, warm_start_from=None):
+    """Trains this model using the Estimator interface.
+
+    Args:
+      config: `tf.contrib.tpu.RunConfig` for the training.
+      warm_start_from: None or a `tf.estimator.WarmStartSettings` object. If
+          provided variables can be initialized from a checkpoint.
+
+    Returs:
+      A `tf.contrib.tpu.TPUEstimator`.
+    """
+    # Noise for generating fake images.
+    self.sample_z = self.z_generator(self.batch_size, self.z_dim)
+
+    bs = self.batch_size * self.num_sub_steps
+    estimator = tf.contrib.tpu.TPUEstimator(
+        config=config,
+        use_tpu=self.use_tpu,
+        model_fn=self._model_fn,
+        train_batch_size=bs,
+        eval_batch_size=bs,
+        warm_start_from=warm_start_from)
+    estimator.train(input_fn=self._input_fn, max_steps=self.training_steps)
 
   def train(self, sess, progress_reporter=None):
     """Runs the training algorithm."""
@@ -303,18 +430,15 @@ class AbstractGAN(object):
 
     # Start training.
     counter = tf.train.global_step(sess, global_step)
-    dataset = self.dataset_content.batch(self.batch_size).prefetch(32)
-    next_element = dataset.make_one_shot_iterator().get_next()
+    batch_input, _ = self._input_fn(params=None)
     start_time = time.time()
 
     g_loss = None
     start_step = int(counter) + 1
     for step in range(start_step, self.training_steps + 1):
       # Fetch next batch and run the single training step.
-      batch_images = sess.run(next_element[0])
-      batch_z = self.z_generator(batch_size, self.z_dim)
-      d_loss, g_loss = self.run_single_train_step(
-          batch_images, batch_z, step, g_loss, sess)
+      features = sess.run(batch_input)
+      d_loss, g_loss = self.run_single_train_step(features, step, g_loss, sess)
 
       sess.run(global_step_inc)
       self.print_progress(step, start_step, start_time, d_loss, g_loss,

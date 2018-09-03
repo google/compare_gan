@@ -14,24 +14,20 @@
 # limitations under the License.
 
 """Implementation of the LS-GAN algorithm (https://arxiv.org/abs/1611.04076)."""
+from __future__ import absolute_import
 from __future__ import division
+from __future__ import print_function
 
 from compare_gan.src.gans.abstract_gan import AbstractGAN
+
 import tensorflow as tf
 
 
 class LSGAN(AbstractGAN):
   """Least Squares Generative Adversarial Networks."""
 
-  def __init__(self, dataset_content, parameters, runtime_info):
-    super(LSGAN, self).__init__(
-        model_name="LSGAN",
-        dataset_content=dataset_content,
-        parameters=parameters,
-        runtime_info=runtime_info)
-
-    # Number of discriminator iterations per one iteration of the generator.
-    self.disc_iters = parameters["disc_iters"]
+  def __init__(self, **kwargs):
+    super(LSGAN, self).__init__("LSGAN", **kwargs)
 
   def build_model(self, is_training=True):
     image_dims = [self.input_height, self.input_width, self.c_dim]

@@ -13,11 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
 import numpy as np
 import scipy.misc
+from six.moves import map
+from six.moves import range
 import tensorflow as tf
 
 

@@ -13,26 +13,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for compare_gan.params."""
-
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from compare_gan.src import params
-
+from compare_gan.src import ms_ssim_score
 import tensorflow as tf
 
 
-class ParamsTest(tf.test.TestCase):
+class MsSsimScoreTest(tf.test.TestCase):
 
-  def testParameterRanges(self):
-    training_parameters = params.GetParameters("WGAN", "wide")
-    self.assertEqual(len(list(training_parameters.keys())), 5)
+  def test_on_one_vs_07_vs_zero_images(self):
+    """Computes the SSIM value for 3 simple images."""
+    with tf.Graph().as_default():
+      generated_images = tf.stack([
+          tf.ones([64, 64, 3]),
+          tf.ones([64, 64, 3]) * 0.7,
+          tf.zeros([64, 64, 3]),
+      ])
+      metric = ms_ssim_score.get_metric_function(generated_images, 1)
 
-    training_parameters = params.GetParameters("BEGAN", "wide")
-    self.assertEqual(len(list(training_parameters.keys())), 6)
+      with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        result = metric(sess)
+        self.assertNear(result, 0.989989, 0.001)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
   tf.test.main()

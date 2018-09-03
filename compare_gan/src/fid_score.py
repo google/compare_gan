@@ -17,26 +17,29 @@
 
 from __future__ import absolute_import
 from __future__ import division
+from __future__ import print_function
+
 import functools
+
 import numpy as np
+from six.moves import range
 import tensorflow as tf
 
 logging = tf.logging
 tfgan_eval = tf.contrib.gan.eval
 
 
-
-def get_fid_function(eval_image_tensor, gen_image_tensor, num_gen_images,
+def get_fid_function(real_image_tensor, gen_image_tensor, num_gen_images,
                      num_eval_images, image_range, inception_graph):
   """Get a fn returning the FID between distributions defined by two tensors.
 
   Wraps session.run calls to generate num_eval_images images from both
-  gen_image_tensor and eval_image_tensor (as num_eval_images is often much
+  gen_image_tensor and real_image_tensor (as num_eval_images is often much
   larger than the training batch size). Then finds the FID between these two
   groups of images.
 
   Args:
-    eval_image_tensor: Tensor of shape [batch_size, dim, dim, 3] which evaluates
+    real_image_tensor: Tensor of shape [batch_size, dim, dim, 3] which evaluates
       to a batch of real eval images. Should be in range [0..255].
     gen_image_tensor: Tensor of shape [batch_size, dim, dim, 3] which evaluates
       to a batch of gen images. Should be in range [0..255].
@@ -48,13 +51,13 @@ def get_fid_function(eval_image_tensor, gen_image_tensor, num_gen_images,
   Returns:
     eval_fn: a function which takes a session as an argument and returns the
       FID between num_eval_images images generated from the distributions
-      defined by gen_image_tensor and eval_image_tensor
+      defined by gen_image_tensor and real_image_tensor
   """
 
   assert image_range == "0_255"
   # Set up graph for generating features to pass to FID eval.
   batch_size_gen = gen_image_tensor.get_shape().as_list()[0]
-  batch_size_real = eval_image_tensor.get_shape().as_list()[0]
+  batch_size_real = real_image_tensor.get_shape().as_list()[0]
 
   # We want to cover only the case that the real data is bigger than
   # generated (50k vs 10k for CIFAR to be comparable with SN GAN)
@@ -65,7 +68,7 @@ def get_fid_function(eval_image_tensor, gen_image_tensor, num_gen_images,
   # generated. This is to maintain memory efficiency if the images are large.
   # For example, for ImageNet, the inception features are much smaller than
   # the images.
-  eval_features_tensor = get_inception_features(eval_image_tensor,
+  eval_features_tensor = get_inception_features(real_image_tensor,
                                                 inception_graph)
   gen_features_tensor = get_inception_features(gen_image_tensor,
                                                inception_graph)
@@ -79,21 +82,15 @@ def get_fid_function(eval_image_tensor, gen_image_tensor, num_gen_images,
   # Make sure we run the same number of batches, as this is what TFGAN code
   # assumes.
   assert num_eval_images // batch_size_real == num_gen_images // batch_size_gen
+  num_batches = num_eval_images // batch_size_real
 
   # Set up another subgraph for calculating FID from fed images.
-  with tf.device("/cpu:0"):
-    feed_gen_features = tf.placeholder(
-        dtype=tf.float32, shape=[num_gen_images] +
-        gen_features_tensor.get_shape().as_list()[1:])
-    feed_eval_features = tf.placeholder(
-        dtype=tf.float32, shape=[num_eval_images] +
-        eval_features_tensor.get_shape().as_list()[1:])
-
-  # Set up a variable to hold the last FID value.
-  fid_variable = tf.Variable(0.0, name="last_computed_FID", trainable=False)
-
-  # Summarize the last computed FID.
-  tf.summary.scalar("last_computed_FID", fid_variable)
+  feed_gen_features = tf.placeholder(
+      dtype=tf.float32, shape=[num_gen_images] +
+      gen_features_tensor.get_shape().as_list()[1:])
+  feed_eval_features = tf.placeholder(
+      dtype=tf.float32, shape=[num_eval_images] +
+      eval_features_tensor.get_shape().as_list()[1:])
 
   # Create the tensor which stores the computed FID. We have extracted the
   # features at the point of image generation so classifier_fn=tf.identity.
@@ -101,14 +98,7 @@ def get_fid_function(eval_image_tensor, gen_image_tensor, num_gen_images,
       classifier_fn=tf.identity,
       real_images=feed_eval_features,
       generated_images=feed_gen_features,
-      num_batches=num_eval_images // batch_size_real)
-
-  # Create an op to update the FID variable.
-  update_fid_op = fid_variable.assign(fid_tensor)
-
-  # Ensure that the variable is updated every time the FID is computed.
-  with tf.control_dependencies([update_fid_op]):
-    fid_tensor = tf.identity(fid_tensor)
+      num_batches=num_batches)
 
   # Define a function which wraps some session.run calls to generate a large
   # number of images and compute FID on them.
@@ -116,7 +106,6 @@ def get_fid_function(eval_image_tensor, gen_image_tensor, num_gen_images,
     """Function which wraps session.run calls to evaluate FID."""
     logging.info("Evaluating.....")
     logging.info("Generating images to feed")
-    num_batches = num_eval_images // batch_size_real
     eval_features_np = []
     gen_features_np = []
     for _ in range(num_batches):

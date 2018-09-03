@@ -22,6 +22,7 @@ from __future__ import print_function
 import os
 
 from compare_gan.src import datasets
+
 import tensorflow as tf
 
 FLAGS = tf.flags.FLAGS
@@ -43,7 +44,6 @@ class DatasetsTest(tf.test.TestCase):
     datasets.load_celeba("celeba", "train", 1, 10)
     datasets.load_lsun("lsun", "train", 1, 10)
     datasets.load_celebahq("celebahq128", "train", 1, 10)
-    datasets.load_celebahq("celebahq256", "train", 1, 10)
 
   def get_element_and_verify_shape(self, dataset, expected_shape):
     element = dataset.make_one_shot_iterator().get_next()
