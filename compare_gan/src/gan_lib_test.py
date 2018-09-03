@@ -30,6 +30,7 @@ from compare_gan.src import gan_lib
 from compare_gan.src.gans import consts
 
 import numpy as np
+from six.moves import range
 import tensorflow as tf
 
 FLAGS = flags.FLAGS

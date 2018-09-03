@@ -13,30 +13,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""" Dataset loading code for compare_gan."""
+"""Dataset loading code for compare_gan."""
 
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
 import os
-import numpy as np
-import tensorflow as tf
 
-from builtins import range
+import numpy as np
+from six.moves import range
+import tensorflow as tf
 
 flags = tf.flags
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string(
-    "dataset_root", "/tmp/"
-    "datasets/gan_compare/", "Folder which contains all datasets.")
+    "dataset_root",
+    "/tmp/datasets/gan_compare/",
+    "Folder which contains all datasets.")
 
 
 def load_convex(dataset_name):
   folder_path = os.path.join(FLAGS.dataset_root, "convex")
   file_path = "%s/%s.npz" % (folder_path, dataset_name)
-  with tf.gfile.Open(file_path, "r") as infile:
+  with tf.gfile.Open(file_path, "rb") as infile:
     data = np.load(infile)
     features, labels = data["x"], data["y"]
     return features, labels
@@ -80,11 +81,12 @@ def unpack_celeba_image(image_data):
 
 
 def get_sharded_filenames(prefix, num_shards, range_start=0, range_end=None):
+  """Retrieves sharded file names."""
   if range_end is None:
     range_end = num_shards
   return [
       os.path.join(FLAGS.dataset_root,
-                   prefix + "-%05d-of-%05d" % (i, num_shards))
+                   "%s-%05d-of-%05d" % (prefix, i, num_shards))
       for i in range(range_start, range_end)
   ]
 

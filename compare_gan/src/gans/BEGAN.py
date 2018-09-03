@@ -15,29 +15,25 @@
 
 """Implementation of the BEGAN algorithm (https://arxiv.org/abs/1703.10717)."""
 
+from __future__ import absolute_import
 from __future__ import division
+from __future__ import print_function
 
 from compare_gan.src.gans import consts
 from compare_gan.src.gans.abstract_gan import AbstractGAN
 from compare_gan.src.gans.ops import batch_norm, linear, conv2d, deconv2d, lrelu
+
 import tensorflow as tf
 
 
 class BEGAN(AbstractGAN):
   """Boundary Equilibrium Generative Adversarial Networks."""
 
-  def __init__(self, dataset_content, parameters, runtime_info):
-    super(BEGAN, self).__init__(
-        model_name="BEGAN",
-        dataset_content=dataset_content,
-        parameters=parameters,
-        runtime_info=runtime_info)
+  def __init__(self, **kwargs):
+    super(BEGAN, self).__init__("BEGAN", **kwargs)
 
-    # Number of discriminator iterations per one iteration of the generator.
-    self.disc_iters = parameters["disc_iters"]
-
-    self.gamma = parameters["gamma"]
-    self.lambd = parameters["lambda"]
+    self.gamma = self.parameters["gamma"]
+    self.lambd = self.parameters["lambda"]
 
   def discriminator(self, x, is_training, reuse=False):
     """BEGAN discriminator (auto-encoder).
@@ -161,7 +157,9 @@ class BEGAN(AbstractGAN):
     self.d_sum = tf.summary.merge([d_loss_real_sum, d_loss_sum])
     self.p_sum = tf.summary.merge([M_sum, k_sum])
 
-  def after_training_step_hook(self, sess, batch_images, batch_z, counter):
+  def after_training_step_hook(self, sess, features, counter):
+    batch_images = features["images"]
+    batch_z = features["z_for_disc_step"]
     # Update k.
     summary_str = sess.run(
         [self.update_k, self.p_sum, self.M, self.k],

@@ -14,7 +14,9 @@
 # limitations under the License.
 
 """Implementation of the VAE algorithm (https://arxiv.org/abs/1312.6114)."""
+from __future__ import absolute_import
 from __future__ import division
+from __future__ import print_function
 
 from compare_gan.src.gans import consts
 from compare_gan.src.gans.abstract_gan import AbstractGAN
@@ -26,12 +28,8 @@ import tensorflow as tf
 class VAE(AbstractGAN):
   """Vanilla Variational Autoencoder."""
 
-  def __init__(self, dataset_content, parameters, runtime_info):
-    super(VAE, self).__init__(
-        model_name="VAE",
-        dataset_content=dataset_content,
-        parameters=parameters,
-        runtime_info=runtime_info)
+  def __init__(self, **kwargs):
+    super(VAE, self).__init__("VAE", **kwargs)
 
   def encoder(self, x, is_training, reuse=False):
     """Implements the Gaussian Encoder."""

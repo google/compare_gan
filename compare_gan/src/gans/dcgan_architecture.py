@@ -14,7 +14,9 @@
 # limitations under the License.
 
 """Implementation of DCGAN generator and discriminator architectures."""
+from __future__ import absolute_import
 from __future__ import division
+from __future__ import print_function
 
 from compare_gan.src.gans import consts
 from compare_gan.src.gans.ops import lrelu, linear, conv2d, deconv2d

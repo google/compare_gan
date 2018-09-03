@@ -14,26 +14,23 @@
 # limitations under the License.
 
 """Implementation of WGAN-GP algorithm (https://arxiv.org/abs/1704.00028)."""
+from __future__ import absolute_import
 from __future__ import division
+from __future__ import print_function
 
 from compare_gan.src.gans.abstract_gan import AbstractGAN
+
 import tensorflow as tf
 
 
 class WGAN_GP(AbstractGAN):
   """Improved Training of Wasserstein GANs."""
 
-  def __init__(self, dataset_content, parameters, runtime_info):
-    super(WGAN_GP, self).__init__(
-        model_name="WGAN_GP",
-        dataset_content=dataset_content,
-        parameters=parameters,
-        runtime_info=runtime_info)
+  def __init__(self, **kwargs):
+    super(WGAN_GP, self).__init__("WGAN_GP", **kwargs)
 
-    # Number of discriminator iterations per one iteration of the generator.
-    self.disc_iters = parameters["disc_iters"]
     # Higher value: more stable, but slower convergence.
-    self.lambd = parameters["lambda"]
+    self.lambd = self.parameters["lambda"]
 
   def build_model(self, is_training=True):
     image_dims = [self.input_height, self.input_width, self.c_dim]

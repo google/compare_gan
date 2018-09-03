@@ -14,17 +14,18 @@
 # limitations under the License.
 
 """Implementation of GANs (MMGAN, NSGAN, WGAN) with different regularizers."""
+from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from compare_gan.src.gans import ablation_resnet_architecture
 from compare_gan.src.gans import consts
 from compare_gan.src.gans import dcgan_architecture
 from compare_gan.src.gans import resnet_architecture
 from compare_gan.src.gans.abstract_gan import AbstractGAN
 
+from six.moves import range
 import tensorflow as tf
-
-from builtins import range
 
 flags = tf.flags
 FLAGS = flags.FLAGS
@@ -36,18 +37,12 @@ flags.DEFINE_boolean("print_penalty_loss", False,
 class AbstractGANWithPenalty(AbstractGAN):
   """GAN class for which we can modify loss/penalty/architecture via params."""
 
-  def __init__(self, dataset_content,
-               parameters, runtime_info,
-               model_name):
-    super(AbstractGANWithPenalty, self).__init__(
-        model_name,
-        dataset_content=dataset_content,
-        parameters=parameters,
-        runtime_info=runtime_info)
+  def __init__(self, model_name, **kwargs):
+    super(AbstractGANWithPenalty, self).__init__(model_name, **kwargs)
 
-    self.architecture = parameters.get("architecture")
-    self.penalty_type = parameters.get("penalty_type")
-    self.discriminator_normalization = parameters.get(
+    self.architecture = self.parameters.get("architecture")
+    self.penalty_type = self.parameters.get("penalty_type")
+    self.discriminator_normalization = self.parameters.get(
         "discriminator_normalization")
 
     if self.penalty_type not in consts.PENALTIES:
@@ -60,16 +55,16 @@ class AbstractGANWithPenalty(AbstractGAN):
     if self.architecture not in consts.ARCHITECTURES:
       raise ValueError("Architecture '%s' not recognized." % self.architecture)
 
-    # Number of discriminator iterations per one iteration of the generator.
-    self.disc_iters = parameters["disc_iters"]
-
     # Regularization strength.
-    self.lambd = parameters["lambda"]
-    self.beta2 = parameters.get("beta2", 0.999)
+    self.lambd = self.parameters["lambda"]
+    self.beta2 = self.parameters.get("beta2", 0.999)
 
     # If the optimizer wasn't specified, use Adam to be consistent with
     # other GANs.
-    self.optimizer = parameters.get("optimizer", "adam")
+    self.optimizer = self.parameters.get("optimizer", "adam")
+
+    self.resnet_ablation_type = self.parameters.get(
+        "resnet_ablation_type", "none")
 
   def get_optimizer(self, name_prefix):
     if self.optimizer == "adam":
@@ -95,8 +90,7 @@ class AbstractGANWithPenalty(AbstractGAN):
         step, start_step, start_time, d_loss, g_loss, progress_reporter, sess)
     if FLAGS.print_penalty_loss and step % 100 == 0:
       penalty_loss = sess.run(self.penalty_loss)
-      print(
-          "\t\tlambda: %.4f penalty_loss: %.4f" % (self.lambd, penalty_loss))
+      print("\t\tlambda: %.4f penalty_loss: %.4f" % (self.lambd, penalty_loss))
 
   def discriminator(self, x, is_training, reuse=False):
     if self.architecture == consts.INFOGAN_ARCH:
@@ -124,6 +118,10 @@ class AbstractGANWithPenalty(AbstractGAN):
       return dcgan_architecture.sn_discriminator(
           x, self.batch_size, reuse,
           use_sn=self.discriminator_normalization == consts.SPECTRAL_NORM)
+    elif self.architecture == consts.RESNET5_ABLATION:
+      return ablation_resnet_architecture.resnet5_discriminator(
+          x, is_training, self.discriminator_normalization, reuse,
+          unused_ablation_type=self.resnet_ablation_type)
     else:
       raise NotImplementedError(
           "Architecture %s not implemented." % self.architecture)
@@ -157,6 +155,12 @@ class AbstractGANWithPenalty(AbstractGAN):
       return dcgan_architecture.sn_generator(
           z, self.batch_size, self.output_height, self.output_width, self.c_dim,
           is_training, reuse)
+    elif self.architecture == consts.RESNET5_ABLATION:
+      assert self.output_height == self.output_width
+      return ablation_resnet_architecture.resnet5_generator(
+          z, is_training=is_training, reuse=reuse, colors=self.c_dim,
+          output_shape=self.output_height,
+          unused_ablation_type=self.resnet_ablation_type)
     else:
       raise NotImplementedError(
           "Architecture %s not implemented." % self.architecture)
@@ -204,28 +208,148 @@ class AbstractGANWithPenalty(AbstractGAN):
     return tf.reduce_mean(
         [tf.nn.l2_loss(i) for i in d_weights], name="l2_penalty")
 
-  def build_model(self, is_training=True):
-    image_dims = [self.input_height, self.input_width, self.c_dim]
-    batch_size = self.batch_size
+  def _model_fn(self, features, labels, mode, params):
+    del labels  # unused.
+    tf.logging.info("model_fn(): features=%s, mode=%s, params=%s)", features,
+                    mode, params)
 
-    # Input images.
-    self.inputs = tf.placeholder(
-        tf.float32, [batch_size] + image_dims, name="real_images")
+    if mode == tf.estimator.ModeKeys.PREDICT:
 
-    # Noise vector.
-    self.z = tf.placeholder(tf.float32, [batch_size, self.z_dim], name="z")
+      noise = features["z"]
+      predictions = {
+          "generated_images": self.generator(noise, is_training=False)
+      }
+      return tf.contrib.tpu.TPUEstimatorSpec(mode=mode, predictions=predictions)
+
+    is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+    global_step = tf.train.get_or_create_global_step()
+
+    def create_sub_step_loss(features, sub_step_idx=0, reuse=True):
+      """Creates the loss for a slice of the current batch.
+
+      Args:
+        features: A dictionary with the feature tensors.
+        sub_step_idx: Index of the slice of the batch to use to construct the
+            loss. If self.unroll_disc_iters is True this must be 0 and the whole
+            batch will be used.
+        reuse: Bool, whether to reuse existing variables for the models.
+            Should be False for the first call and True on all other calls.
+      """
+
+      tf.logging.info("sub_step_idx: %s, params: %s, unroll_disc_iters: %s",
+                      sub_step_idx, params, self.unroll_disc_iters)
+      assert (sub_step_idx == 0) or self.unroll_disc_iters
+      bs = params["batch_size"] // self.num_sub_steps
+      with self._different_batch_size(bs):
+        begin = sub_step_idx * self.batch_size
+        end = begin + self.batch_size
+        f = {k: v[begin:end] for k, v in features.iteritems()}
+        self.create_loss(f, is_training=is_training, reuse=reuse)
+        self.fake_images = self.generator(f["z"], is_training=False, reuse=True)
+
+    if mode == tf.estimator.ModeKeys.TRAIN:
+      #########
+      # TRAIN #
+      #########
+      # Discriminator training.
+      # Create the model and loss for z_for_disc_step features.
+      features["z"] = features["z_for_disc_step"]
+      create_sub_step_loss(features, reuse=False)
+
+      # Divide trainable variables into a group for D and group for G.
+      t_vars = tf.trainable_variables()
+      d_vars = [var for var in t_vars if "discriminator" in var.name]
+      g_vars = [var for var in t_vars if "generator" in var.name]
+      self.check_variables(t_vars, d_vars, g_vars)
+
+      # Discriminator training.
+      deps = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+      with tf.control_dependencies(deps):
+        d_optimizer = self.get_optimizer("d_")
+        g_optimizer = self.get_optimizer("g_")
+        if self.use_tpu:
+          d_optimizer = tf.contrib.tpu.CrossShardOptimizer(d_optimizer)
+          g_optimizer = tf.contrib.tpu.CrossShardOptimizer(g_optimizer)
+
+        deps.append(
+            d_optimizer.minimize(
+                self.d_loss, var_list=d_vars, global_step=global_step))
+
+      if self.unroll_disc_iters:
+        for sub_step in range(1, self.disc_iters):
+          with tf.control_dependencies(deps):
+            create_sub_step_loss(features, sub_step)
+            deps.append(
+                d_optimizer.minimize(
+                    self.d_loss, var_list=d_vars, global_step=global_step))
+
+      # Generator training.
+      # Create loss using the z_for_gen_step features.
+      features["z"] = features["z_for_gen_step"]
+      if self.num_sub_steps > 1:
+        create_sub_step_loss(features, self.num_sub_steps - 1)
+      else:
+        create_sub_step_loss(features)
+
+      with tf.control_dependencies(deps):
+        if self.unroll_disc_iters or self.disc_iters == 1:
+          train_op = g_optimizer.minimize(self.g_loss, var_list=g_vars)
+        else:
+          # We should only train the generator every self.disc_iter steps.
+          # We can do this using `tf.cond`. Both paths must return a tensor.
+          # Our true_fn will return a tensor that depends on training the
+          # generator, while the tensor from false_fn depends on nothing.
+          def do_train_generator():
+            actual_train_op = g_optimizer.minimize(self.g_loss, var_list=g_vars)
+            with tf.control_dependencies([actual_train_op]):
+              return tf.constant(0)
+          def do_not_train_generator():
+            return tf.constant(0)
+          counter = tf.to_int32(global_step) - 1
+          train_op = tf.cond(
+              tf.equal(counter % self.disc_iters, 0),
+              true_fn=do_train_generator,
+              false_fn=do_not_train_generator).op
+    else:
+      train_op = None
+
+    return tf.contrib.tpu.TPUEstimatorSpec(
+        mode=mode,
+        # Estimator requires a loss which gets displayed on TensorBoard.
+        # The given Tensor is evaluated but not used to create gradients.
+        loss=self.d_loss,
+        train_op=train_op)
+
+  def create_loss(self, features, is_training=True, reuse=False):
+    """Build the loss tensors for discriminator and generator.
+
+    This method will set self.d_loss, self.g_loss and self.penalty_loss.
+
+    Args:
+      features: Optional dictionary with inputs to the model ("images" should
+          contain the real images and "z" the noise for the generator).
+      is_training: If True build the model in training mode. If False build the
+          model for inference mode (e.g. use trained averages for batch norm).
+      reuse: Bool, whether to reuse existing variables for the models.
+          This is only used for unrolling discriminator iterations when training
+          on TPU.
+
+    Raises:
+      ValueError: If set of meta/hyper parameters is not supported.
+    """
+    images = features["images"]  # Input images.
+    z = features["z"]  # Noise vector.
 
     # Discriminator output for real images.
     d_real, d_real_logits, _ = self.discriminator(
-        self.inputs, is_training=is_training, reuse=False)
+        images, is_training=is_training, reuse=reuse)
 
     # Discriminator output for fake images.
-    generated = self.generator(self.z, is_training=is_training, reuse=False)
+    generated = self.generator(z, is_training=is_training, reuse=reuse)
     d_fake, d_fake_logits, _ = self.discriminator(
         generated, is_training=is_training, reuse=True)
 
-    self.discriminator_output = self.discriminator(
-        self.inputs, is_training=is_training, reuse=True)[0]
+    self.discriminator_output = d_real
 
     if self.model_name not in consts.MODELS_WITH_PENALTIES:
       raise ValueError("Model %s not recognized" % self.model_name)
@@ -263,13 +387,12 @@ class AbstractGANWithPenalty(AbstractGAN):
     # Define the penalty.
     if self.penalty_type == consts.NO_PENALTY:
       self.penalty_loss = 0.0
-      pass
     elif self.penalty_type == consts.DRAGAN_PENALTY:
-      self.penalty_loss = self.dragan_penalty(self.inputs, self.discriminator,
+      self.penalty_loss = self.dragan_penalty(images, self.discriminator,
                                               is_training)
       self.d_loss += self.lambd * self.penalty_loss
     elif self.penalty_type == consts.WGANGP_PENALTY:
-      self.penalty_loss = self.wgangp_penalty(self.inputs, generated,
+      self.penalty_loss = self.wgangp_penalty(images, generated,
                                               self.discriminator, is_training)
       self.d_loss += self.lambd * self.penalty_loss
     elif self.penalty_type == consts.L2_PENALTY:
@@ -279,18 +402,33 @@ class AbstractGANWithPenalty(AbstractGAN):
       raise NotImplementedError(
           "The penalty %s was not implemented." % self.penalty_type)
 
-    # Divide trainable variables into a group for D and group for G.
-    t_vars = tf.trainable_variables()
-    d_vars = [var for var in t_vars if "discriminator" in var.name]
-    g_vars = [var for var in t_vars if "generator" in var.name]
-    self.check_variables(t_vars, d_vars, g_vars)
+    # Setup summaries.
 
-    # Define optimization ops.
-    with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-      self.d_optim = self.get_optimizer("d_").minimize(
-          self.d_loss, var_list=d_vars)
-      self.g_optim = self.get_optimizer("g_").minimize(
-          self.g_loss, var_list=g_vars)
+    if not self.use_tpu:
+      d_loss_real_sum = tf.summary.scalar("d_loss_real", d_loss_real)
+      d_loss_fake_sum = tf.summary.scalar("d_loss_fake", d_loss_fake)
+      d_loss_sum = tf.summary.scalar("d_loss", self.d_loss)
+      g_loss_sum = tf.summary.scalar("g_loss", self.g_loss)
+      self.g_sum = tf.summary.merge([d_loss_fake_sum, g_loss_sum])
+      self.d_sum = tf.summary.merge([d_loss_real_sum, d_loss_sum])
+
+  def build_model(self, is_training=True):
+    """Build the model (input placeholders, losses and optimizer ops).
+
+    Args:
+      is_training: If True build the model in training mode. If False build the
+          model for inference mode (e.g. use trained averages for batch norm).
+    """
+    image_dims = [self.input_height, self.input_width, self.c_dim]
+    batch_size = self.batch_size
+    # Input images.
+    self.inputs = tf.placeholder(
+        tf.float32, [batch_size] + image_dims, name="real_images")
+    # Noise vector.
+    self.z = tf.placeholder(tf.float32, [batch_size, self.z_dim], name="z")
+
+    features = {"images": self.inputs, "z": self.z}
+    self.create_loss(features, is_training=is_training)
 
     # Store testing images.
     self.fake_images = self.generator(self.z, is_training=False, reuse=True)
@@ -312,14 +450,18 @@ class AbstractGANWithPenalty(AbstractGAN):
           reuse=True)
       result = tf.identity(result, name="result")
 
-    # Setup summaries.
-    d_loss_real_sum = tf.summary.scalar("d_loss_real", d_loss_real)
-    d_loss_fake_sum = tf.summary.scalar("d_loss_fake", d_loss_fake)
-    d_loss_sum = tf.summary.scalar("d_loss", self.d_loss)
-    g_loss_sum = tf.summary.scalar("g_loss", self.g_loss)
+    # Divide trainable variables into a group for D and group for G.
+    t_vars = tf.trainable_variables()
+    d_vars = [var for var in t_vars if "discriminator" in var.name]
+    g_vars = [var for var in t_vars if "generator" in var.name]
+    self.check_variables(t_vars, d_vars, g_vars)
 
-    self.g_sum = tf.summary.merge([d_loss_fake_sum, g_loss_sum])
-    self.d_sum = tf.summary.merge([d_loss_real_sum, d_loss_sum])
+    # Define optimization ops.
+    with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
+      self.d_optim = self.get_optimizer("d_").minimize(
+          self.d_loss, var_list=d_vars)
+      self.g_optim = self.get_optimizer("g_").minimize(
+          self.g_loss, var_list=g_vars)
 
 
 class GAN_PENALTY(AbstractGANWithPenalty):
@@ -329,33 +471,19 @@ class GAN_PENALTY(AbstractGANWithPenalty):
      G_loss = -log(D(fake_images))  [maximizes log(D)]
   """
 
-  def __init__(self, dataset_content, parameters,
-               runtime_info):
-    super(GAN_PENALTY, self).__init__(
-        dataset_content=dataset_content,
-        parameters=parameters,
-        runtime_info=runtime_info,
-        model_name=consts.GAN_WITH_PENALTY)
+  def __init__(self, **kwargs):
+    super(GAN_PENALTY, self).__init__(consts.GAN_WITH_PENALTY, **kwargs)
 
 
 class WGAN_PENALTY(AbstractGANWithPenalty):
   """Generative Adverserial Networks with the Wasserstein loss."""
 
-  def __init__(self, dataset_content, parameters,
-               runtime_info):
-    super(WGAN_PENALTY, self).__init__(
-        dataset_content=dataset_content,
-        parameters=parameters,
-        runtime_info=runtime_info,
-        model_name=consts.WGAN_WITH_PENALTY)
+  def __init__(self, **kwargs):
+    super(WGAN_PENALTY, self).__init__(consts.WGAN_WITH_PENALTY, **kwargs)
 
 
 class LSGAN_PENALTY(AbstractGANWithPenalty):
   """Generative Adverserial Networks with the Least Squares loss."""
 
-  def __init__(self, dataset_content, parameters, runtime_info):
-    super(LSGAN_PENALTY, self).__init__(
-        dataset_content=dataset_content,
-        parameters=parameters,
-        runtime_info=runtime_info,
-        model_name=consts.LSGAN_WITH_PENALTY)
+  def __init__(self, **kwargs):
+    super(LSGAN_PENALTY, self).__init__(consts.LSGAN_WITH_PENALTY, **kwargs)

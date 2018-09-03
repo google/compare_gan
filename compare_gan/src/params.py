@@ -40,6 +40,7 @@ class ParamRanges(object):
   """Class for holding parameter ranges."""
 
   def __init__(self):
+    super(ParamRanges, self).__init__()
     self._params = {}
 
   def AddRange(self, param_name, default, value_range,
@@ -401,8 +402,8 @@ DATASET_PARAMS = {
         "dataset_name": "celebahq128",
         "eval_test_samples": 3000
     },
-
 }
+
 
 def GetDatasetParameters(dataset_name):
   """Returns default dataset parameters for a specific dataset."""

@@ -40,6 +40,7 @@ setup(
         'future',
         'numpy',
         'protobuf',
+        'six',
         'tensor2tensor',
     ],
     extras_require={

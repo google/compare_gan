@@ -21,9 +21,14 @@ https://arxiv.org/pdf/1710.08446.pdf
 
 from __future__ import absolute_import
 from __future__ import division
+from __future__ import print_function
+
 import itertools
+
 from compare_gan.src import image_similarity
+
 import numpy as np
+from six.moves import range
 import tensorflow as tf
 
 logging = tf.logging

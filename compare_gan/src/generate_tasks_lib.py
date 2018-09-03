@@ -17,6 +17,7 @@
 
 from __future__ import absolute_import
 from __future__ import division
+from __future__ import print_function
 
 import collections
 import copy
@@ -28,7 +29,9 @@ import random
 from compare_gan.src import params
 from compare_gan.src import simple_task_pb2
 from compare_gan.src import task_utils
+
 from compare_gan.src.gans import consts
+import six
 import tensorflow as tf
 from google.protobuf import text_format
 
@@ -144,7 +147,7 @@ def TestGansWithPenaltyNewDatasets(architecture):
 def GetDefaultParams(gan_params):
   """Return the default params for a GAN (=the ones used in the paper)."""
   ret = {}
-  for param_name, param_info in gan_params.iteritems():
+  for param_name, param_info in six.iteritems(gan_params):
     ret[param_name] = param_info.default
   return ret
 

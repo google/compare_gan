@@ -16,7 +16,9 @@
 """Evaluation for GAN tasks."""
 from __future__ import absolute_import
 from __future__ import division
+from __future__ import print_function
 
+import abc
 import csv
 import os
 
@@ -28,6 +30,8 @@ from compare_gan.src.gans import consts
 
 import numpy as np
 import pandas as pd
+import scipy.spatial
+from six.moves import range
 import tensorflow as tf
 
 flags = tf.flags
@@ -119,7 +123,7 @@ def ComputeTFGanFIDScore(fake_images, real_images, inception_graph):
         batch_size=INCEPTION_BATCH * ratio)
     eval_fn = fid_score_lib.get_fid_function(
         gen_image_tensor=fake_images_batch,
-        eval_image_tensor=real_images_batch,
+        real_image_tensor=real_images_batch,
         num_gen_images=fake_images.shape[0],
         num_eval_images=real_images.shape[0],
         image_range="0_255",
@@ -173,9 +177,27 @@ def ShouldRunAccuracyLossTrainVsTest(options):
   return options["gan_type"] == consts.GAN_WITH_PENALTY
 
 
-def ComputeAccuracyLoss(options, gan, test_images, sess,
-                        result_dict, max_train_examples=50000, num_repeat=5):
-  """Compute discriminator accurate/loss on train/test/fake set."""
+def ComputeAccuracyLoss(options,
+                        sess,
+                        gan,
+                        test_images,
+                        max_train_examples=50000,
+                        num_repeat=5):
+  """Compute discriminator accurate/loss on train/test/fake set.
+
+  Args:
+    options: Dict[Text, Text] with all parameters for the current trial.
+    sess: Tf.Session object.
+    gan: Any AbstractGAN instance.
+    test_images: numpy array with test images.
+    max_train_examples: How many "train" examples to get from the dataset.
+                        In each round, some of them will be randomly selected
+                        to evaluate train set accuracy.
+    num_repeat: How many times to repreat the computation.
+                The mean of all the results is reported.
+  Returns:
+    Dict[Text, float] with all the computed scores.
+  """
   train_images = GetRealImages(
       options["dataset"],
       split_name="train",
@@ -249,11 +271,10 @@ def ComputeAccuracyLoss(options, gan, test_images, sess,
     fake_accuracy = sum(fake_predictions) / float(len(fake_predictions))
     train_d_loss = np.mean(train_d_losses)
     test_d_loss = np.mean(test_d_losses)
-    print(
-        "repeat %d: train_accuracy: %.3f, test_accuracy: %.3f, fake_accuracy: "
-        "%.3f, train_d_loss: %.3f, test_d_loss: %.3f" %
-        (repeat, train_accuracy, test_accuracy, fake_accuracy, train_d_loss,
-         test_d_loss))
+    print("repeat %d: train_accuracy: %.3f, test_accuracy: %.3f, "
+          "fake_accuracy: %.3f, train_d_loss: %.3f, test_d_loss: %.3f" %
+          (repeat, train_accuracy, test_accuracy, fake_accuracy, train_d_loss,
+           test_d_loss))
 
     train_accuracies.append(train_accuracy)
     test_accuracies.append(test_accuracy)
@@ -261,6 +282,7 @@ def ComputeAccuracyLoss(options, gan, test_images, sess,
     train_d_losses.append(train_d_loss)
     test_d_losses.append(test_d_loss)
 
+  result_dict = {}
   result_dict["train_accuracy"] = np.mean(train_accuracies)
   result_dict["test_accuracy"] = np.mean(test_accuracies)
   result_dict["fake_accuracy"] = np.mean(fake_accuracies)
@@ -295,14 +317,248 @@ def ComputeMultiscaleSSIMScore(fake_images):
   return score
 
 
-class FakeDatasetContent(object):
+class EvalTask(object):
+  """Class that describes a single evaluation task.
 
-  def batch(self, unused_batch_size):
-    pass
+  For example: compute inception score or compute accuracy.
+  The classes that inherit from it, should implement the methods below.
+  """
+  __metaclass__ = abc.ABCMeta
+
+  @abc.abstractmethod
+  def MetricsList(self):
+    """List of metrics that this class generates.
+
+    These are the only keys that RunXX methods can return in
+    their output maps.
+    Returns:
+      frozenset of strings, which are the names of the metrics that task
+      computes.
+    """
+    return frozenset()
+
+  def RunInSession(self, options, sess, gan, real_images):
+    """Runs the task inside the session, which allows access to tf Graph.
+
+    This code is run after all images were generated, but the session
+    is still active. It allows looking into the contents of the graph.
+
+    WARNING: real_images might have 1 or 3 channels (depending on the dataset).
+
+    Args:
+      options: Dict, containing all parameters for the current trial.
+      sess: tf.Session object.
+      gan: AbstractGAN object, that is already present in the current tf.Graph.
+      real_images: numpy array with real 'train' images.
+
+    Returns:
+      Dict with metric values. The keys must be contained in the set that
+      "MetricList" method above returns.
+    """
+    del options, sess, gan, real_images
+    return {}
+
+  def RunAfterSession(self, options, fake_images, real_images):
+    """Runs the task after all the generator calls, after session was closed.
+
+    WARNING: the images here, are in 0..255 range, with 3 color channels.
+    Args:
+      options: Dict, containing all parameters for the current trial.
+      fake_images: numpy array with generated images. Expanded 3 channels,
+        values 0..255. dtype: float.
+      real_images: numpy array with real 'train' images, they are expanded 3
+        channels. dtype: float
+
+    Returns:
+      Dict with metric values. The keys must be contained in the set that
+      "MetricList" method above returns.
+    """
+    del options, fake_images, real_images
+    return {}
 
 
-def RunCheckpointEval(checkpoint_path, task_workdir, options, inception_graph):
-  """Evaluate model at given checkpoint_path."""
+class InceptionScoreTask(EvalTask):
+  """Task that computes inception score for the generated images."""
+
+  def __init__(self, inception_graph):
+    self._inception_graph = inception_graph
+
+  _INCEPTION_SCORE = "inception_score"
+
+  def MetricsList(self):
+    return frozenset([self._INCEPTION_SCORE])
+
+  # 'RunInSession' it not needed for this task.
+
+  def RunAfterSession(self, options, fake_images, real_images):
+    del options, real_images
+    logging.info("Computing inception score.")
+    result_dict = {}
+    result_dict[self._INCEPTION_SCORE] = GetInceptionScore(
+        fake_images, self._inception_graph)
+    logging.info("Inception score computed: %.3f",
+                 result_dict[self._INCEPTION_SCORE])
+    return result_dict
+
+
+class FIDScoreTask(EvalTask):
+  """Task that computes FID score for the generated images."""
+
+  def __init__(self, inception_graph):
+    self._inception_graph = inception_graph
+
+  _FID_SCORE = "fid_score"
+
+  def MetricsList(self):
+    return frozenset([self._FID_SCORE])
+
+  # 'RunInSession' it not needed for this task.
+
+  def RunAfterSession(self, options, fake_images, real_images):
+    del options
+    logging.info("Computing FID score.")
+    result_dict = {}
+    result_dict[self._FID_SCORE] = ComputeTFGanFIDScore(
+        fake_images, real_images, self._inception_graph)
+    logging.info("Frechet Inception Distance is %.3f",
+                 result_dict[self._FID_SCORE])
+    return result_dict
+
+
+class MultiscaleSSIMTask(EvalTask):
+  """Task that computes MSSIMScore for generated images."""
+
+  _MS_SSIM = "ms_ssim"
+
+  def MetricsList(self):
+    return frozenset([self._MS_SSIM])
+
+  # 'RunInSession' it not needed for this task.
+
+  def RunAfterSession(self, options, fake_images, real_images):
+    del real_images
+    result_dict = {}
+    if ShouldRunMultiscaleSSIM(options):
+      result_dict[self._MS_SSIM] = ComputeMultiscaleSSIMScore(fake_images)
+      logging.info("MS-SSIM score computed: %.3f", result_dict[self._MS_SSIM])
+    return result_dict
+
+
+class ComputeAccuracyTask(EvalTask):
+  """Task that computes the accuracy over test/train/fake data."""
+
+  def MetricsList(self):
+    return frozenset([
+        "train_accuracy", "test_accuracy", "fake_accuracy", "train_d_loss",
+        "test_d_loss"
+    ])
+
+  # RunAfterSession is not needed for this task.
+
+  def RunInSession(self, options, sess, gan, real_images):
+    if ShouldRunAccuracyLossTrainVsTest(options):
+      return ComputeAccuracyLoss(options, sess, gan, real_images)
+    else:
+      return {}
+
+
+def ComputeFractalDimension(fake_images,
+                            num_fd_seeds=100,
+                            n_bins=1000,
+                            scale=0.1):
+  """Compute Fractal Dimension of fake_images.
+
+  Args:
+    fake_images: an np array of datapoints, the dimensionality and scaling of
+      images can be arbitrary
+    num_fd_seeds: number of random centers from which fractal dimension
+      computation is performed
+     n_bins: number of bins to split the range of distance values into
+     scale: the scale of the y interval in the log-log plot for which we apply a
+       linear regression fit
+
+  Returns:
+    fractal dimension of the dataset.
+  """
+  assert len(fake_images.shape) >= 2
+  assert fake_images.shape[0] >= num_fd_seeds
+
+  num_images = fake_images.shape[0]
+  # In order to apply scipy function we need to flatten the number of dimensions
+  # to 2
+  fake_images = np.reshape(fake_images, (num_images, -1))
+  fake_images_subset = fake_images[np.random.randint(
+      num_images, size=num_fd_seeds)]
+
+  distances = scipy.spatial.distance.cdist(fake_images,
+                                           fake_images_subset).flatten()
+  min_distance = np.min(distances[np.nonzero(distances)])
+  max_distance = np.max(distances)
+  buckets = min_distance * (
+      (max_distance / min_distance)**np.linspace(0, 1, n_bins))
+  # Create a table where first column corresponds to distances r
+  # and second column corresponds to number of points N(r) that lie
+  # within distance r from the random seeds
+  fd_result = np.zeros((n_bins - 1, 2))
+  fd_result[:, 0] = buckets[1:]
+  fd_result[:, 1] = np.sum(np.less.outer(distances, buckets[1:]), axis=0)
+
+  # We compute the slope of the log-log plot at the middle y value
+  # which is stored in y_val; the linear regression fit is computed on
+  # the part of the plot that corresponds to an interval around y_val
+  # whose size is 2*scale*(total width of the y axis)
+  max_y = np.log(num_images * num_fd_seeds)
+  min_y = np.log(num_fd_seeds)
+  x = np.log(fd_result[:, 0])
+  y = np.log(fd_result[:, 1])
+  y_width = max_y - min_y
+  y_val = min_y + 0.5 * y_width
+
+  start = np.argmax(y > y_val - scale * y_width)
+  end = np.argmax(y > y_val + scale * y_width)
+
+  slope = np.linalg.lstsq(
+      a=np.vstack([x[start:end], np.ones(end - start)]).transpose(),
+      b=y[start:end].reshape(end - start, 1))[0][0][0]
+  return slope
+
+
+class FractalDimensionTask(EvalTask):
+  """Fractal dimension metric."""
+
+  _FRACTAL_DIMENSION = "fractal_dimension"
+
+  def MetricsList(self):
+    return frozenset([self._FRACTAL_DIMENSION])
+
+  def RunAfterSession(self, options, fake_images, real_images):
+    del real_images
+    result_dict = {}
+    if options.get("compute_fractal_dimension", False):
+      result_dict[self._FRACTAL_DIMENSION] = ComputeFractalDimension(
+          fake_images)
+    return result_dict
+
+
+class NanFoundError(Exception):
+  """Exception thrown, when the Nans are present in the output."""
+
+
+def RunCheckpointEval(checkpoint_path, task_workdir, options, tasks_to_run):
+  """Evaluate model at given checkpoint_path.
+
+  Args:
+    checkpoint_path: string, path to the single checkpoint to evaluate.
+    task_workdir: directory, where results and logs can be written.
+    options: Dict[Text, Text] with all parameters for the current trial.
+    tasks_to_run: List of objects that inherit from EvalTask.
+
+  Returns:
+    Dict[Text, float] with all the computed results.
+
+  Raises:
+    NanFoundError: If gan output has generated any NaNs.
+  """
 
   # Make sure that the same latent variables are used for each evaluation.
   np.random.seed(42)
@@ -331,7 +587,6 @@ def RunCheckpointEval(checkpoint_path, task_workdir, options, inception_graph):
   logging.info("Real data processed.")
 
   result_dict = {}
-  default_value = -1.0
   # Get Fake images from the generator.
   samples = []
   logging.info("Running eval for dataset %s, checkpoint: %s, num_examples: %d ",
@@ -341,7 +596,7 @@ def RunCheckpointEval(checkpoint_path, task_workdir, options, inception_graph):
       gan = gan_lib.create_gan(
           gan_type=gan_type,
           dataset=dataset,
-          dataset_content=FakeDatasetContent(),  # This should never be used.
+          dataset_content=None,
           options=options,
           checkpoint_dir=checkpoint_dir,
           result_dir=result_dir,
@@ -357,19 +612,17 @@ def RunCheckpointEval(checkpoint_path, task_workdir, options, inception_graph):
       num_batches = int(np.ceil(num_test_examples / gan.batch_size))
       for _ in range(num_batches):
         z_sample = gan.z_generator(gan.batch_size, gan.z_dim)
-        feed_dict = {gan.z: z_sample}
-        x = sess.run(gan.fake_images, feed_dict=feed_dict)
+        x = sess.run(gan.fake_images, feed_dict={gan.z: z_sample})
         # If NaNs were generated, ignore this checkpoint and assign a very high
         # FID score which we handle specially later.
-        while np.isnan(x).any():
+        if np.isnan(x).any():
           logging.error("Detected NaN in fake_images! Returning NaN.")
-          default_value = NAN_DETECTED
-          return result_dict, default_value
+          raise NanFoundError("Detected NaN in fake images.")
         samples.append(x)
 
-      if ShouldRunAccuracyLossTrainVsTest(options):
-        result_dict = ComputeAccuracyLoss(options, gan, real_images,
-                                          sess, result_dict)
+      print("Fake data generated, running tasks in session.")
+      for task in tasks_to_run:
+        result_dict.update(task.RunInSession(options, sess, gan, real_images))
 
   fake_images = np.concatenate(samples, axis=0)
   # Adjust the number of fake images to the number of images in the test set.
@@ -386,50 +639,75 @@ def RunCheckpointEval(checkpoint_path, task_workdir, options, inception_graph):
 
   fake_images *= 255.0
 
-  logging.info("Fake data processed, computing inception score.")
+  logging.info("Fake data processed. Starting tasks for checkpoint: %s.",
+               checkpoint_path)
 
-  result_dict["inception_score"] = GetInceptionScore(fake_images,
-                                                     inception_graph)
-  logging.info("Inception score computed: %.3f", result_dict["inception_score"])
+  for task in tasks_to_run:
+    result_dict.update(task.RunAfterSession(options, fake_images, real_images))
 
-
-  result_dict["fid_score"] = ComputeTFGanFIDScore(fake_images, real_images,
-                                                  inception_graph)
-  logging.info("Frechet Inception Distance for checkpoint %s is %.3f",
-               checkpoint_path, result_dict["fid_score"])
-
-  if ShouldRunMultiscaleSSIM(options):
-    result_dict["ms_ssim"] = ComputeMultiscaleSSIMScore(fake_images)
-    logging.info("MS-SSIM score computed: %.3f", result_dict["ms_ssim"])
-
-  return result_dict, default_value
+  return result_dict
 
 
 def RunTaskEval(options, task_workdir, inception_graph, out_file="scores.csv"):
-  """Evaluates all checkpoints for the given task."""
+  """Evaluates all checkpoints for the given task.
+
+  Fetches all the checkpoints that exists in the workdir and evaluates each one.
+  Final scores are written into the out_file and the best fid_score is also
+  stored in the "value" file in the task_workdir.
+
+  Args:
+    options: Dict[Text, Text] with all parameters for the current trial.
+    task_workdir: Directory where checkpoints are present. All scores will be
+      written there too.
+    inception_graph: GraphDef that contains inception model (used for FID
+      computation).
+    out_file: name of the file to store final outputs.
+  """
+  tasks_to_run = [
+      InceptionScoreTask(inception_graph),
+      FIDScoreTask(inception_graph),
+      MultiscaleSSIMTask(),
+      ComputeAccuracyTask(),
+      FractalDimensionTask(),
+  ]
+
   # If the output file doesn't exist, create it.
   csv_header = [
-      "checkpoint_path", "model", "dataset", "tf_seed", "inception_score",
-      "fid_score", "ms_ssim_score", "train_accuracy",
-      "test_accuracy", "fake_accuracy", "train_d_loss", "test_d_loss",
-      "sample_id"
+      "checkpoint_path",
+      "model",
+      "dataset",
+      "tf_seed",
+      "sample_id",
   ]
+  task_headers = []
+  for task in tasks_to_run:
+    task_headers.extend(sorted(task.MetricsList()))
+  csv_header.extend(task_headers)
+
   train_params = GetAllTrainingParams()
   csv_header.extend(train_params)
 
   scores_path = os.path.join(task_workdir, out_file)
   if not tf.gfile.Exists(scores_path):
     with tf.gfile.Open(scores_path, "w") as f:
-      writer = csv.writer(f)
-      writer.writerow(csv_header)
+      writer = csv.DictWriter(f, fieldnames=csv_header)
+      writer.writeheader()
 
   # Get the list of records that were already computed, to not re-do them.
   finished_checkpoints = set()
-  with tf.gfile.Open(scores_path, "r") as f:
-    reader = csv.reader(f)
-    next(reader)  # Skip header.
-    for row in reader:
-      finished_checkpoints.add(row[0])
+  try:
+    with tf.gfile.Open(scores_path, "r") as f:
+      reader = csv.DictReader(f)
+      for row in reader:
+        if sorted(csv_header) != sorted(list(row.keys())):
+          raise ValueError("wrong csv keys.")
+        finished_checkpoints.add(row["checkpoint_path"])
+  except ValueError:
+    logging.error("CSV headers no longer match. Recomputing all results.")
+    finished_checkpoints = {}
+    with tf.gfile.Open(scores_path, "w") as f:
+      writer = csv.DictWriter(f, fieldnames=csv_header)
+      writer.writeheader()
 
   # Compute all records not done yet.
   with tf.gfile.Open(scores_path, "a") as f:
@@ -445,22 +723,27 @@ def RunTaskEval(options, task_workdir, inception_graph, out_file="scores.csv"):
         continue
 
       # Write the FID score and all training params.
-      result_dict, default_value = RunCheckpointEval(
-          checkpoint_path, task_workdir, options, inception_graph)
+      default_value = -1.0
+      try:
+        result_dict = RunCheckpointEval(checkpoint_path, task_workdir, options,
+                                        tasks_to_run)
+      except NanFoundError as nan_found_error:
+        result_dict = {}
+
+        logging.error(nan_found_error)
+        default_value = NAN_DETECTED
+
       logging.info(result_dict)
       tf_seed = str(options.get("tf_seed", -1))
       sample_id = str(options.get("sample_id", -1))
       output_row = [
           checkpoint_path, options["gan_type"], options["dataset"], tf_seed,
-          "%.3f" % result_dict.get("inception_score", default_value),
-          "%.3f" % result_dict.get("fid_score", default_value),
-          "%.3f" % result_dict.get("ms_ssim", default_value),
-          "%.3f" % result_dict.get("train_accuracy", default_value),
-          "%.3f" % result_dict.get("test_accuracy", default_value),
-          "%.3f" % result_dict.get("fake_accuracy", default_value),
-          "%.3f" % result_dict.get("train_d_loss", default_value),
-          "%.3f" % result_dict.get("test_d_loss", default_value), sample_id
+          sample_id
       ]
+
+      for task_metric in task_headers:
+        output_row.append("%.3f" % result_dict.get(task_metric, default_value))
+
       for param in train_params:
         if param in options:
           output_row.append(options[param])
@@ -470,9 +753,18 @@ def RunTaskEval(options, task_workdir, inception_graph, out_file="scores.csv"):
 
       f.flush()
 
-  # Write a "value" file with a final evaluation score.
-  # This score is used to report results to the Vizier service if applicable.
+
+def SaveFinalEvaluationScore(scores_path, metric_name, output_path):
+  """Get final evaluation score (lowest "metric_name") and save in the file.
+
+  Reads the lowest "metric_name" value from the scores and
+  writes it in the output_path.
+  Args:
+    scores_path: string, CSV file with the scores.
+    metric_name: string, name of the metric/column in CSV.
+    output_path: string, file to write the result to.
+  """
   data = pd.read_csv(tf.gfile.Open(scores_path), sep=",")
-  min_fid_score = min(data["fid_score"])
-  with tf.gfile.Open(os.path.join(task_workdir, "value"), mode="w") as f:
-    f.write(str(min_fid_score))
+  min_score = min(data[metric_name])
+  with tf.gfile.Open(output_path, mode="w") as f:
+    f.write(str(min_score))
