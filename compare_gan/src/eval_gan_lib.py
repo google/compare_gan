@@ -24,6 +24,7 @@ import os
 
 from compare_gan.src import fid_score as fid_score_lib
 from compare_gan.src import gan_lib
+from compare_gan.src import kid_score as kid_score_lib
 from compare_gan.src import ms_ssim_score
 from compare_gan.src import params
 from compare_gan.src.gans import consts
@@ -98,6 +99,39 @@ def GetInceptionScore(fake_images, inception_graph):
     with tf.train.MonitoredSession() as sess:
       inception_score = sess.run(inception_score_op)
       return inception_score
+
+
+# Images must have the same resolution and pixels must be in 0..255 range.
+def ComputeKIDScore(fake_images, real_images, inception_graph):
+  """Compute KID score using the kid_score library."""
+  assert fake_images.shape[3] == 3
+  assert real_images.shape[3] == 3
+  bs_real = real_images.shape[0]
+  bs_fake = fake_images.shape[0]
+  assert bs_real % INCEPTION_BATCH == 0
+  assert bs_fake % INCEPTION_BATCH == 0
+  assert bs_real >= bs_fake and bs_real % bs_fake == 0
+  ratio = bs_real // bs_fake
+  logging.info("Ratio of real/fake images is: %d", ratio)
+  with tf.Graph().as_default():
+    fake_images_batch = tf.train.batch(
+        [tf.convert_to_tensor(fake_images, dtype=tf.float32)],
+        enqueue_many=True,
+        batch_size=INCEPTION_BATCH)
+    real_images_batch = tf.train.batch(
+        [tf.convert_to_tensor(real_images, dtype=tf.float32)],
+        enqueue_many=True,
+        batch_size=INCEPTION_BATCH * ratio)
+    eval_fn = kid_score_lib.get_kid_function(
+        gen_image_tensor=fake_images_batch,
+        real_image_tensor=real_images_batch,
+        num_gen_images=fake_images.shape[0],
+        num_eval_images=real_images.shape[0],
+        image_range="0_255",
+        inception_graph=inception_graph)
+    with tf.train.MonitoredTrainingSession() as sess:
+      kid_score = eval_fn(sess)
+  return kid_score
 
 
 # Images must have the same resolution and pixels must be in 0..255 range.
@@ -422,6 +456,29 @@ class FIDScoreTask(EvalTask):
         fake_images, real_images, self._inception_graph)
     logging.info("Frechet Inception Distance is %.3f",
                  result_dict[self._FID_SCORE])
+    return result_dict
+
+
+class KIDScoreTask(EvalTask):
+  """Task that computes KID score for the generated images."""
+
+  def __init__(self, inception_graph):
+    self._inception_graph = inception_graph
+
+  _KID_SCORE = "kid_score"
+
+  def MetricsList(self):
+    return frozenset([self._KID_SCORE])
+
+  # 'RunInSession' it not needed for this task.
+
+  def RunAfterSession(self, options, fake_images, real_images):
+    result_dict = {}
+    if options.get("compute_kid_score", False):
+      logging.info("Computing KID score.")
+      result_dict[self._KID_SCORE] = ComputeKIDScore(fake_images, real_images,
+                                                     self._inception_graph)
+      logging.info("KID score is %.3f", result_dict[self._KID_SCORE])
     return result_dict
 
 
