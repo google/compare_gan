@@ -53,7 +53,7 @@ def unpack_clevr_image(image_data):
 def load_clevr(dataset_name, split_name, num_threads, buffer_size):
   del dataset_name
   filenames = tf.data.Dataset.list_files(
-      os.path.join(FLAGS.multigan_dataset_root, "clevr_%s*" % split_name))
+      os.path.join(FLAGS.multigan_dataset_root, "clevr/%s*" % split_name))
 
   return tf.data.TFRecordDataset(
       filenames,
