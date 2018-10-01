@@ -1,7 +1,7 @@
-# A Case for Object Compositionality in Generative Models of Images
+# A Case for Object Compositionality in Deep Generative Models of Images
 
 This is the code repository complementing the
-["A Case for Object Compositionality in Generative Models of Images"](todo).
+["A Case for Object Compositionality in Deep Generative Models of Images"](todo).
 
 ## Datasets
 
@@ -15,7 +15,7 @@ the original dataset (using train/test/valid respectively), re-scaled and
 randomly placed in the image. A fixed-offset from the border ensures that digits
 appear entirely in the image.
 
-#### Uniform
+#### Independent
 
 All digits 0-9 have an equal chance of appearing in the image. This roughly
 results in a uniform distribution over all 3-tuples of digits in the images. In
@@ -41,7 +41,7 @@ Digits are sampled [uniformly](#uniform) and colored either
 appears in a Multi-MNIST image. Digits are drawn one by one into the canvas
 without blending colors, such that overlapping digits occlude one another.
 
-#### RGB Occluded + CIFAR10
+### CIFAR10 + RGB MM
 
 Draws digits from [rgb occluded](#rgb-occluded) images on top of a randomly
 sampled CIFAR10 image (resized to 64 x 64 using bilinear interpolation).
