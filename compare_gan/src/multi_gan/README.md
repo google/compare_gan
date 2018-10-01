@@ -5,7 +5,8 @@ This is the code repository complementing the
 
 ## Datasets
 
-The following provides an overview of the datasets that were used.
+The following provides an overview of the datasets that were used. Corresponding
+.tfrecords files are available [here](todo).
 
 ### Multi-MNIST
 
