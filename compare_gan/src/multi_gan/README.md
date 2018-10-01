@@ -1,5 +1,7 @@
 # A Case for Object Compositionality in Deep Generative Models of Images
 
+![clevr-generated](illustrations/clevr_generated.png)
+
 This is the code repository complementing the
 ["A Case for Object Compositionality in Deep Generative Models of Images"](todo).
 
