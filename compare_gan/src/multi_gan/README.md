@@ -6,15 +6,14 @@ This is the code repository complementing the
 ## Datasets
 
 The following provides an overview of the datasets that were used. Corresponding
-.tfrecords files are available [here](todo).
+.tfrecords files for all custom datasets are available [here](todo).
 
 ### Multi-MNIST
 
-All Multi-MNIST datasets are available [here](todo). In these dataset each image
-consists of 3 (potentially overlapping) MNIST digits. Digits are obtained from
-the original dataset (using train/test/valid respectively), re-scaled and
-randomly placed in the image. A fixed-offset from the border ensures that digits
-appear entirely in the image.
+In these dataset each image consists of 3 (potentially overlapping) MNIST digits.
+Digits are obtained from the original dataset (using train/test/valid respectively),
+re-scaled and randomly placed in the image. A fixed-offset from the border ensures
+that digits appear entirely in the image.
 
 #### Independent
 
