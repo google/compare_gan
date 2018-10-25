@@ -3,12 +3,12 @@
 ![clevr-generated](illustrations/clevr_generated.png)
 
 This is the code repository complementing the
-["A Case for Object Compositionality in Deep Generative Models of Images"](todo).
+["A Case for Object Compositionality in Deep Generative Models of Images"](https://arxiv.org/pdf/1810.10340.pdf).
 
 ## Datasets
 
 The following provides an overview of the datasets that were used. Corresponding
-.tfrecords files for all custom datasets are available [here](todo).
+.tfrecords files for all custom datasets are available [here](https://goo.gl/Eub81x).
 
 ### Multi-MNIST
 
