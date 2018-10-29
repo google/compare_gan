@@ -45,7 +45,8 @@ flags.DEFINE_string("checkpoint", "all",
                     "Which checkpoint(s) to evaluate for a given study/task."
                     "Supports {'all', <int>}.")
 flags.DEFINE_enum("visualization_type", "multi_image", [
-    "multi_image", "latent", "multi_latent"], "How to visualize this GAN.")
+    "image", "multi_image", "latent", "multi_latent"],
+                  "How to visualize this GAN.")
 flags.DEFINE_integer("batch_size", 64, "Size of the batch.")
 flags.DEFINE_integer("images_per_fig", 4, "How many images to stack in a fig.")
 FLAGS = flags.FLAGS
@@ -206,6 +207,25 @@ def SaveMultiGanGeneratorImages(aggregated_images, generated_images, save_dir):
     plt.close(fig)
 
 
+def SaveGeneratorImages(aggregated_images, save_dir):
+  """Visualizes the aggregated output of all generators.
+
+  Args:
+    aggregated_images: The aggregated image (B, W, H, C).
+    save_dir: The path to the directory in which the figure should be saved.
+  """
+
+  n_images, _, _, _ = aggregated_images.shape
+
+  for i in range(n_images):
+    fig, ax = plt.subplots(figsize=(5, 5))
+
+    PlotImage(ax, aggregated_images[i])
+    plt.savefig(os.path.join(save_dir, "generator_images_%d.png" % i),
+                bbox_inches="tight")
+    plt.close(fig)
+
+
 def GetMultiGANGeneratorsOp(graph, gan_type, architecture, aggregate):
   """Returns the op to obtain the output of all generators."""
 
@@ -277,6 +297,16 @@ def EvalCheckpoint(checkpoint_path, task_workdir, options, out_cp_dir):
         # Fetch data and save images.
         fake_images, generator_preds = sess.run(fetches, feed_dict=feed_dict)
         SaveMultiGanGeneratorImages(fake_images, generator_preds, out_cp_dir)
+
+      # Compute outputs for GeneratorImages.
+      elif FLAGS.visualization_type == "image":
+        # Construct feed dict
+        z_sample = gan.z_generator(gan.batch_size, gan.z_dim)
+        feed_dict = {gan.z: z_sample}
+
+        # Fetch data and save images.
+        fake_images = sess.run(gan.fake_images, feed_dict=feed_dict)
+        SaveGeneratorImages(fake_images, out_cp_dir)
 
       # Compute outputs for MultiGanLatentTraversalImages
       elif (FLAGS.visualization_type == "multi_latent" and
@@ -362,9 +392,8 @@ def EvalTask(options, task_workdir, out_dir):
   if FLAGS.checkpoint == "all":
     all_checkpoint_paths = checkpoint_state.all_model_checkpoint_paths
   else:
-    all_checkpoint_paths = [
-        cp_path for cp_path in checkpoint_state.all_model_checkpoint_paths if
-        cp_path.split("-")[-1] == FLAGS.checkpoint]
+    all_checkpoint_paths = ["%s/checkpoint/%s.model-%s" % (
+        FLAGS.eval_task_workdir, options["gan_type"], FLAGS.checkpoint)]
 
   for checkpoint_path in all_checkpoint_paths:
     out_cp_dir = os.path.join(
@@ -405,6 +434,6 @@ def main(unused_argv):
   EvalTask(options, task_workdir, out_dir)
 
 if __name__ == "__main__":
-  flags.mark_flag_as_required("eval_workdir")
+  flags.mark_flag_as_required("eval_task_workdir")
   flags.mark_flag_as_required("out_dir")
   tf.app.run()
