@@ -104,10 +104,14 @@ class EvalGanLibTest(tf.test.TestCase):
   _FAKE_FID_SCORE = 18.3
 
   def test_mock_gan_and_mock_fid(self):
-    """Mocks out the GAN and FID computation and check that eval still works."""
+    """Mocks out the GAN and eval tasks and check that eval still works."""
     workdir = os.path.join(tf.test.get_temp_dir(), self.id())
     tf.logging.info("Workdir: %s" % workdir)
-    options = {"gan_type": "GAN", "dataset": "fake", "eval_test_samples": 50}
+    options = {
+        "gan_type": "GAN", "dataset": "fake", "eval_test_samples": 50,
+        "gilbo_max_train_cycles": 5, "gilbo_train_steps_per_cycle": 10,
+        "gilbo_eval_steps": 10, "compute_gilbo": True,
+    }
     checkpoint_path = os.path.join(workdir, "model")
     self._create_checkpoint("foo", checkpoint_path)
 
@@ -134,6 +138,7 @@ class EvalGanLibTest(tf.test.TestCase):
           tf.get_variable("foo", shape=[1])
           fake_images = tf.ones([16, 64, 64, 1])
           mock_gan.fake_images = fake_images
+          mock_gan.z_dim = 64
 
         mock_gan.build_model.side_effect = create_mock_gan
         fake_inception = self._create_fake_inception_graph()
@@ -143,12 +148,17 @@ class EvalGanLibTest(tf.test.TestCase):
             eval_gan_lib.InceptionScoreTask(inception_graph),
             eval_gan_lib.FIDScoreTask(inception_graph),
             eval_gan_lib.MultiscaleSSIMTask(),
-            eval_gan_lib.ComputeAccuracyTask()
+            eval_gan_lib.ComputeAccuracyTask(),
+            eval_gan_lib.GILBOTask(workdir, workdir, options["dataset"]),
         ]
 
         result_dict = eval_gan_lib.RunCheckpointEval(checkpoint_path, workdir,
                                                      options, tasks_to_run)
         self.assertEquals(result_dict["fid_score"], self._FAKE_FID_SCORE)
+
+        print(result_dict)
+        self.assertNear(result_dict["gilbo"], 0.0, 5.0,
+                        "GILBO should be pretty close to 0!")
 
   def test_mock_gan_and_nan(self):
     """Tests the case, where GAN starts returning NaNs."""
@@ -218,6 +228,61 @@ class EvalGanLibTest(tf.test.TestCase):
         # Make sure that the keys are matchhing the MetricsList from the task
         self.assertSetEqual(eval_gan_lib.ComputeAccuracyTask().MetricsList(),
                             set(result_dict.keys()))
+
+  def test_condition_number_for_mock(self):
+    """Tests that condition number task runs end to end without crashing."""
+    workdir = os.path.join(tf.test.get_temp_dir(), self.id())
+    tf.logging.info("Workdir: %s" % workdir)
+    options = {
+        "gan_type": "GAN",
+        "dataset": "fake",
+        "eval_test_samples": 50,
+        "compute_generator_condition_number": True
+    }
+    checkpoint_path = os.path.join(workdir, "model")
+    self._create_checkpoint("foo", checkpoint_path)
+
+    with mock.patch.object(gan_lib, "create_gan", autospec=True) as mock_cls:
+      mock_gan = mock_cls.return_value
+      mock_gan.batch_size = 16
+      mock_gan.z_dim = 2
+
+      def z_generator(batch_size, z_dim):
+        return np.random.uniform(
+            -1, 1, size=(batch_size, z_dim)).astype(np.float32)
+
+      mock_gan.z_generator = z_generator
+
+      def create_mock_gan(is_training):
+        """Creates a minimal graph that has all the required GAN nodes.
+
+        It also has a single (unused) variable inside, to make sure that
+        tf.Saver is happy.
+
+        Args:
+          is_training: unused, but required by mock.
+        """
+        del is_training
+        z = tf.placeholder(
+            tf.float32, shape=(mock_gan.batch_size, mock_gan.z_dim))
+        mock_gan.z = z
+        # Trivial function from z to fake images to compute Jacobian of.
+        fake_images = tf.tile(
+            tf.reshape(mock_gan.z, [16, 2, 1, 1]), [1, 32, 64, 1])
+        mock_gan.fake_images = fake_images
+        tf.get_variable("foo", shape=[1])
+
+      mock_gan.build_model.side_effect = create_mock_gan
+
+      tasks_to_run = [
+          eval_gan_lib.GeneratorConditionNumberTask(),
+      ]
+
+      result_dict = eval_gan_lib.RunCheckpointEval(checkpoint_path, workdir,
+                                                   options, tasks_to_run)
+      self.assertEquals(result_dict["log_condition_number_count"], 16)
+      self.assertEquals(result_dict["log_condition_number_mean"], 0)
+      self.assertEquals(result_dict["log_condition_number_std"], 0)
 
   def test_csv_writing(self):
     """Verifies that results are correctly written to final CSV file."""

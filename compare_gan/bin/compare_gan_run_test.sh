@@ -18,3 +18,8 @@
 rm -rf /tmp/results
 compare_gan_generate_tasks --workdir=/tmp/results --experiment=test
 compare_gan_run_one_task --workdir=/tmp/results --task_num=0 --alsologtostderr --dataset_root=/tmp/datasets
+
+echo "Training model and evaluating GILBO score"
+
+compare_gan_generate_tasks --workdir=/tmp/results_gilbo --experiment=test_gilbo
+compare_gan_run_one_task --workdir=/tmp/results_gilbo --task_num=0 --alsologtostderr --dataset_root=/tmp/datasets

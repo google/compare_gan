@@ -78,6 +78,15 @@ def TestExp():
   return CreateCrossProductAndAddDefaultParams(config)
 
 
+def TestGILBOExp():
+  config = TestExp()[0]
+  config["compute_gilbo"] = True
+  config["gilbo_max_train_cycles"] = 2
+  config["gilbo_train_steps_per_cycle"] = 100
+  config["gilbo_eval_steps"] = 100
+  return [config]
+
+
 def TestGansWithPenalty():
   """Run for one epoch over all tested GANs."""
   config = {
@@ -700,6 +709,8 @@ def GetTasks(experiment):
 
   if experiment == "test":
     return TestExp()
+  if experiment == "test_gilbo":
+    return TestGILBOExp()
   elif experiment == "test_penalty":
     return TestGansWithPenalty()
   elif experiment == "test_new_datasets":

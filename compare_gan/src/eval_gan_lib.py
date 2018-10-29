@@ -24,6 +24,8 @@ import os
 
 from compare_gan.src import fid_score as fid_score_lib
 from compare_gan.src import gan_lib
+from compare_gan.src import gilbo as gilbo_lib
+from compare_gan.src import jacobian_conditioning as conditioning_lib
 from compare_gan.src import kid_score as kid_score_lib
 from compare_gan.src import ms_ssim_score
 from compare_gan.src import params
@@ -77,7 +79,7 @@ SUPPORTED_GANS = [
 def GetAllTrainingParams():
   all_params = set(["architecture"])
   for gan_type in SUPPORTED_GANS:
-    for dataset in ["mnist", "fashion-mnist", "cifar10", "celeba"]:
+    for _ in ["mnist", "fashion-mnist", "cifar10", "celeba"]:
       p = params.GetParameters(gan_type, "wide")
       all_params.update(p.keys())
   logging.info("All training parameter exported: %s", sorted(all_params))
@@ -86,6 +88,7 @@ def GetAllTrainingParams():
 
 # Fake images are already re-scaled to [0, 255] range.
 def GetInceptionScore(fake_images, inception_graph):
+  """Compute the Inception score."""
   assert fake_images.shape[3] == 3
   num_images = fake_images.shape[0]
   assert num_images % INCEPTION_BATCH == 0
@@ -231,6 +234,10 @@ def ComputeAccuracyLoss(options,
                 The mean of all the results is reported.
   Returns:
     Dict[Text, float] with all the computed scores.
+
+  Raises:
+    ValueError: If the number of test_images is greater than the number of
+                training images returned by the dataset.
   """
   train_images = GetRealImages(
       options["dataset"],
@@ -597,6 +604,94 @@ class FractalDimensionTask(EvalTask):
     return result_dict
 
 
+class GILBOTask(EvalTask):
+  """Compute GILBO metric and related consistency metrics."""
+
+  def __init__(self, outdir, task_workdir, dataset_name):
+    self.outdir = outdir
+    self.task_workdir = task_workdir
+    self.dataset = dataset_name
+
+  def MetricsList(self):
+    return frozenset([
+        "gilbo",
+        "gilbo_train_consistency",
+        "gilbo_eval_consistency",
+        "gilbo_self_consistency",
+    ])
+
+  def RunInSession(self, options, sess, gan, real_images):
+    del real_images
+    result_dict = {}
+    if options.get("compute_gilbo", False):
+      (gilbo, gilbo_train_consistency,
+       gilbo_eval_consistency, gilbo_self_consistency) = gilbo_lib.TrainGILBO(
+           gan, sess, self.outdir, self.task_workdir, self.dataset, options)
+      result_dict["gilbo"] = gilbo
+      result_dict["gilbo_train_consistency"] = gilbo_train_consistency
+      result_dict["gilbo_eval_consistency"] = gilbo_eval_consistency
+      result_dict["gilbo_self_consistency"] = gilbo_self_consistency
+
+    return result_dict
+
+
+def ComputeGeneratorConditionNumber(sess, gan):
+  """Computes the generator condition number.
+
+  Computes the Jacobian of the generator in session, then postprocesses to get
+  the condition number.
+
+  Args:
+    sess: tf.Session object.
+    gan: AbstractGAN object, that is already present in the current tf.Graph.
+
+  Returns:
+    A list of length gan.batch_size. Each element is the condition number
+    computed at a single z sample within a minibatch.
+  """
+  shape = gan.fake_images.get_shape().as_list()
+  flat_generator_output = tf.reshape(
+      gan.fake_images, [gan.batch_size, np.prod(shape[1:])])
+  tf_jacobian = conditioning_lib.compute_jacobian(
+      xs=gan.z, fx=flat_generator_output)
+  z_sample = gan.z_generator(gan.batch_size, gan.z_dim)
+  np_jacobian = sess.run(tf_jacobian, feed_dict={gan.z: z_sample})
+  result_dict = conditioning_lib.analyze_jacobian(np_jacobian)
+  return result_dict["metric_tensor"]["log_condition_number"]
+
+
+class GeneratorConditionNumberTask(EvalTask):
+  """Computes the generator condition number.
+
+  Computes the condition number for metric Tensor of the generator Jacobian.
+  This condition number is computed locally for each z sample in a minibatch.
+  Returns the mean log condition number and standard deviation across the
+  minibatch.
+
+  Follows the methods in https://arxiv.org/abs/1802.08768.
+  """
+
+  _CONDITION_NUMBER_COUNT = "log_condition_number_count"
+  _CONDITION_NUMBER_MEAN = "log_condition_number_mean"
+  _CONDITION_NUMBER_STD = "log_condition_number_std"
+
+  def MetricsList(self):
+    return frozenset([
+        self._CONDITION_NUMBER_COUNT, self._CONDITION_NUMBER_MEAN,
+        self._CONDITION_NUMBER_STD
+    ])
+
+  def RunInSession(self, options, sess, gan, real_images):
+    del real_images
+    result_dict = {}
+    if options.get("compute_generator_condition_number", False):
+      result = ComputeGeneratorConditionNumber(sess, gan)
+      result_dict[self._CONDITION_NUMBER_COUNT] = len(result)
+      result_dict[self._CONDITION_NUMBER_MEAN] = np.mean(result)
+      result_dict[self._CONDITION_NUMBER_STD] = np.std(result)
+    return result_dict
+
+
 class NanFoundError(Exception):
   """Exception thrown, when the Nans are present in the output."""
 
@@ -615,6 +710,7 @@ def RunCheckpointEval(checkpoint_path, task_workdir, options, tasks_to_run):
 
   Raises:
     NanFoundError: If gan output has generated any NaNs.
+    ValueError: If options["gan_type"] is not supported.
   """
 
   # Make sure that the same latent variables are used for each evaluation.
@@ -720,12 +816,17 @@ def RunTaskEval(options, task_workdir, inception_graph, out_file="scores.csv"):
       computation).
     out_file: name of the file to store final outputs.
   """
+  outdir = options.get("eval_outdir", task_workdir)
+
   tasks_to_run = [
       InceptionScoreTask(inception_graph),
       FIDScoreTask(inception_graph),
       MultiscaleSSIMTask(),
       ComputeAccuracyTask(),
       FractalDimensionTask(),
+      KIDScoreTask(inception_graph),
+      GeneratorConditionNumberTask(),
+      GILBOTask(outdir, task_workdir, options["dataset"]),
   ]
 
   # If the output file doesn't exist, create it.
@@ -744,7 +845,8 @@ def RunTaskEval(options, task_workdir, inception_graph, out_file="scores.csv"):
   train_params = GetAllTrainingParams()
   csv_header.extend(train_params)
 
-  scores_path = os.path.join(task_workdir, out_file)
+  scores_path = os.path.join(outdir, out_file)
+
   if not tf.gfile.Exists(scores_path):
     with tf.gfile.Open(scores_path, "w") as f:
       writer = csv.DictWriter(f, fieldnames=csv_header)
