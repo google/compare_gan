@@ -1,21 +1,23 @@
-# A Case for Object Compositionality in Generative Models of Images
+# A Case for Object Compositionality in Deep Generative Models of Images
+
+![clevr-generated](illustrations/clevr_generated.png)
 
 This is the code repository complementing the
-["A Case for Object Compositionality in Generative Models of Images"](todo).
+["A Case for Object Compositionality in Deep Generative Models of Images"](https://arxiv.org/pdf/1810.10340.pdf).
 
 ## Datasets
 
-The following provides an overview of the datasets that were used.
+The following provides an overview of the datasets that were used. Corresponding
+.tfrecords files for all custom datasets are available [here](https://goo.gl/Eub81x).
 
 ### Multi-MNIST
 
-All Multi-MNIST datasets are available [here](todo). In these dataset each image
-consists of 3 (potentially overlapping) MNIST digits. Digits are obtained from
-the original dataset (using train/test/valid respectively), re-scaled and
-randomly placed in the image. A fixed-offset from the border ensures that digits
-appear entirely in the image.
+In these dataset each image consists of 3 (potentially overlapping) MNIST digits.
+Digits are obtained from the original dataset (using train/test/valid respectively),
+re-scaled and randomly placed in the image. A fixed-offset from the border ensures
+that digits appear entirely in the image.
 
-#### Uniform
+#### Independent
 
 All digits 0-9 have an equal chance of appearing in the image. This roughly
 results in a uniform distribution over all 3-tuples of digits in the images. In
@@ -41,7 +43,7 @@ Digits are sampled [uniformly](#uniform) and colored either
 appears in a Multi-MNIST image. Digits are drawn one by one into the canvas
 without blending colors, such that overlapping digits occlude one another.
 
-#### RGB Occluded + CIFAR10
+### CIFAR10 + RGB MM
 
 Draws digits from [rgb occluded](#rgb-occluded) images on top of a randomly
 sampled CIFAR10 image (resized to 64 x 64 using bilinear interpolation).
