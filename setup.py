@@ -39,13 +39,17 @@ setup(
     install_requires=[
         'future',
         'numpy',
+        'pandas',
         'protobuf',
         'six',
         'tensor2tensor',
     ],
     extras_require={
+        'matplotlib': ['matplotlib>=1.5.2'],
         'pillow': ['pillow>=5.0.0'],
         'pandas': ['pandas>=0.23.0'],
+        'pstar': ['pstar>=0.1.6'],
+        'scipy': ['scipy>=1.0.0'],
         'tensorflow': ['tensorflow>=1.7'],
         'tensorflow_gpu': ['tensorflow-gpu>=1.4.1'],
     },

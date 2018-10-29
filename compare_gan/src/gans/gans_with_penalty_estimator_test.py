@@ -135,6 +135,7 @@ class GANSWithPenaltyEstimatorTest(parameterized.TestCase, tf.test.TestCase):
     parameters.update({
         "use_tpu": use_tpu,
         "discriminator_normalization": consts.NO_NORMALIZATION,
+
         "architecture": consts.RESNET_CIFAR,
         "penalty_type": consts.NO_PENALTY,
         "disc_iters": disc_iters,
