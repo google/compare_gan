@@ -1,73 +1,113 @@
-## Compare GAN code.
+# Compare GAN
 
-This is the code that was used in "Are GANs Created Equal? A Large-Scale Study"
-paper (https://arxiv.org/abs/1711.10337) and in "The GAN Landscape: Losses,
-Architectures, Regularization, and Normalization"
-(https://arxiv.org/abs/1807.04720).
+This repository offers TensorFlow implementations for many components related to
+**Generative Adversarial Networks**:
 
-If you want to see the version used only in the first paper - please see the
-*v1* branch of this repository.
+*   losses (such non-saturating GAN, least-squares GAN, and WGAN),
+*   penalties (such as the gradient penalty),
+*   normalization techniques (such as spectral normalization, batch
+    normalization, and layer normalization),
+*   neural architectures (BigGAN, ResNet, DCGAN), and
+*   evaluation metrics (FID score, Inception Score, precision-recall, and KID
+    score).
 
-## Pre-trained models
+The code is **configurable via [Gin](https://github.com/google/gin-config)** and
+runs on **GPU/TPU/CPUs**. Several research papers make use of this repository,
+including:
 
-The pre-trained models are available on TensorFlow Hub. Please see
-[this colab](https://colab.research.google.com/github/google/compare_gan/blob/master/compare_gan/src/tfhub_models.ipynb)
-for an example how to use them.
+1.  [Are GANs Created Equal? A Large-Scale Study](https://arxiv.org/abs/1711.10337)
+    [<font color="green">[Code]</font>](https://github.com/google/compare_gan/tree/v1)
+    \
+    Mario Lucic*, Karol Kurach*, Marcin Michalski, Sylvain Gelly, Olivier
+    Bousquet **[NeurIPS 2018]**
 
-### Best hyperparameters
+2.  [The GAN Landscape: Losses, Architectures, Regularization, and Normalization](https://arxiv.org/abs/1807.04720)
+    [<font color="green">[Code]</font>](https://github.com/google/compare_gan/tree/v2)
+    \
+    Karol Kurach*, Mario Lucic*, Xiaohua Zhai, Marcin Michalski, Sylvain Gelly
+    **[2018]**
 
-This repository also contains the values for the best hyperparameters for
-different combinations of models, regularizations and penalties. You can see
-them in `generate_tasks_lib.py` file and train using
-`--experiment=best_models_sndcgan`
+3.  [Assessing Generative Models via Precision and Recall](https://arxiv.org/abs/1806.00035)
+    [<font color="green">[Code]</font>](https://github.com/google/compare_gan/blob/560697ee213f91048c6b4231ab79fcdd9bf20381/compare_gan/src/prd_score.py)
+    \
+    Mehdi S. M. Sajjadi, Olivier Bachem, Mario Lucic, Olivier Bousquet, Sylvain
+    Gelly **[NeurIPS 2018]**
 
-### Installation:
+4.  [GILBO: One Metric to Measure Them All](https://arxiv.org/abs/1802.04874)
+    [<font color="green">[Code]</font>](https://github.com/google/compare_gan/blob/560697ee213f91048c6b4231ab79fcdd9bf20381/compare_gan/src/gilbo.py)
+    \
+    Alexander A. Alemi, Ian Fischer **[NeurIPS 2018]**
 
-To install, run:
+5.  [A Case for Object Compositionality in Deep Generative Models of Images](https://arxiv.org/abs/1810.10340)
+    [<font color="green">[Code]</font>](https://github.com/google/compare_gan/tree/v2_multigan)
+    \
+    Sjoerd van Steenkiste, Karol Kurach, Sylvain Gelly **[2018]**
 
-```shell
-python -m pip install -e . --user
-```
+6.  [On Self Modulation for Generative Adversarial Networks](https://arxiv.org/abs/1810.01365)
+    [<font color="green">[Code]</font>](https://github.com/google/compare_gan) \
+    Ting Chen, Mario Lucic, Neil Houlsby, Sylvain Gelly **[ICLR 2019]**
 
-After installing, make sure to run
+7.  [Self-Supervised Generative Adversarial Networks](https://arxiv.org/abs/1811.11212)
+    [<font color="green">[Code]</font>](https://github.com/google/compare_gan) \
+    Ting Chen, Xiaohua Zhai, Marvin Ritter, Mario Lucic, Neil Houlsby **[CVPR
+    2019]**
 
-```shell
-compare_gan_prepare_datasets.sh
-```
 
-It will download all the necessary datasets and frozen TF graphs. By default it
-will store them in `/tmp/datasets`.
+## Installation
 
-WARNING: by default this script only downloads and installs small datasets - it
-doesn't download celebaHQ or lsun bedrooms.
+You can easily install the library and all necessary dependencies by running:
+`pip install -e .` from the `compare_gan/` folder.
 
-*   **Lsun bedrooms dataset**: If you want to install lsun-bedrooms you need to
-    run t2t-datagen yourself (this dataset will take couple hours to download
-    and unpack).
+## Running experiments
 
-*   **CelebaHQ dataset**: currently it is not available in tensor2tensor. Please
-    use the
-    [ProgressiveGAN github](https://github.com/tkarras/progressive_growing_of_gans)
-    for instructions on how to prepare it.
+Simply run the `main.py` passing a `--model_dir` (this is where checkpoints are
+stored) and a `--gin_config` (defines which model on which data set and other
+options). We provide several example configurations in the `example_configs/`
+folder, namely:
 
-### Running
+*   **dcgan_celeba64**: DCGAN architecture with non-saturating loss on CelebA
+    64x64px
+*   **resnet_cifar10**: ResNet architecture with non-saturating loss and
+    spectral normalization on CIFAR-10
+*   **resnet_lsun-bedroom128**: ResNet architecture with WGAN loss and gradient
+    penalty on LSUN-bedrooms 128x128px
+*   **sndcgan_celebahq128**: SN-DCGAN architecture with non-saturating loss and
+    spectral normalization on CelebA-HQ 128x128px
+*   **biggan_imagenet128**: BigGAN architecture with hinge loss and spectral
+    normalization on ImageNet 128x128px
 
-compare_gan has two binaries:
+### Training and evaluation
 
-*   `generate_tasks` - that creates a list of files with parameters to execute
-*   `run_one_task` - that executes a given task, both training and evaluation,
-    and stores results in the CSV file.
+To see all available options please run `python main.py --help`. Main options:
 
-```shell
-# Create tasks for experiment "test" in directory /tmp/results. See "src/generate_tasks_lib.py" to see other possible experiments.
-compare_gan_generate_tasks --workdir=/tmp/results --experiment=test
+*   To **train** the model use `--schedule=train` (default). Training is resumed
+    from the last saved checkpoint.
+*   To **evaluate** all checkpoints use `--schedule=continuous_eval
+    --eval_every_steps=0`. To evaluate only checkpoints where the step size is
+    divisible by 5000, use `--schedule=continuous_eval --eval_every_steps=5000`.
+    By default, 3 averaging runs are used to estimate the Inception Score and
+    the FID score. Keep in mind that when running locally on a single GPU it may
+    not be possible to run training and evaluation simultaneously due to memory
+    constraints.
+*   To **train and evaluate** the model use `--schedule=eval_after_train
+    --eval_every_steps=0`.
 
-# Run task 0 (training and eval)
-compare_gan_run_one_task --workdir=/tmp/results --task_num=0 --dataset_root=/tmp/datasets
+### Training on Cloud TPUs
 
-# Run task 1 (training and eval)
-compare_gan_run_one_task --workdir=/tmp/results --task_num=1 --dataset_root=/tmp/datasets
-```
+We recommend using the
+[ctpu tool](https://github.com/tensorflow/tpu/tree/master/tools/ctpu) to create
+a Cloud TPU and corresponding Compute Engine VM. We use v3-128 Cloud TPU v3 Pod
+for training models on ImageNet in 128x128 resolutions. You can use smaller
+slices if you reduce the batch size (`options.batch_size` in the Gin config) or
+model parameters. Keep in mind that the model quality might change. Before
+training make sure that the environment variable `TPU_NAME` is set. Running
+evaluation on TPUs is currently not supported. Use a VM with a single GPU
+instead.
 
-Results (all computed metrics) will be stored in
-`/tmp/results/TASK_NUM/scores.csv`.
+### Datasets
+
+Compare GAN uses [TensorFlow Datasets](https://www.tensorflow.org/datasets) and
+it will automatically download and prepare the data. For ImageNet you will need
+to download the archive yourself. For CelebAHq you need to download and prepare
+the images on your own. If you are using TPUs make sure to point the training
+script to your Google Storage Bucket (`--tfds_data_dir`).

@@ -1,0 +1,25 @@
+
+dataset.name = "lsun-bedroom"
+options.architecture = "resnet5_arch"
+options.batch_size = 64
+options.gan_class = @GPUModularGAN
+options.lamba = 10
+options.training_steps = 40000
+options.z_dim = 128
+
+# Generator
+G.batch_norm_fn = @batch_norm
+standardize_batch.decay = 0.9
+standardize_batch.epsilon = 1e-5
+
+# Discriminator
+options.disc_iters = 5
+D.spectral_norm = False
+
+# Loss and optimizer
+loss.fn = @wasserstein
+penalty.fn = @wgangp_penalty
+ModularGAN.g_lr = 0.0001
+ModularGAN.g_optimizer_fn = @tf.train.AdamOptimizer
+tf.train.AdamOptimizer.beta1 = 0.5
+tf.train.AdamOptimizer.beta2 = 0.9

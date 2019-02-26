@@ -20,38 +20,34 @@ from setuptools import setup
 
 setup(
     name='compare_gan',
-    version='1.0',
-    description=('Compare GAN - code from "Are GANs created equal? '
-                 'A Large Scale Study" paper'),
+    version='3.0',
+    description=(
+        'Compare GAN - A modular library for training and evaluating GANs.'),
     author='Google LLC',
     author_email='no-reply@google.com',
-    url='http://github.com/TODO',
+    url='https://github.com/google/compare_gan',
     license='Apache 2.0',
     packages=find_packages(),
-    package_data={
-    },
-    scripts=[
-        'compare_gan/bin/compare_gan_generate_tasks',
-        'compare_gan/bin/compare_gan_prepare_datasets.sh',
-        'compare_gan/bin/compare_gan_run_one_task',
-        'compare_gan/bin/compare_gan_run_test.sh',
-    ],
+    package_data={},
     install_requires=[
         'future',
+        'gin-config==0.1.4',
         'numpy',
         'pandas',
-        'protobuf',
         'six',
-        'tensor2tensor',
+        'tensorflow-datasets==1.0.1',
+        'tensorflow-hub>=0.2.0',
+        'tensorflow-gan==0.0.0.dev0',
+        'matplotlib>=1.5.2',
+        'pstar>=0.1.6',
+        'scipy>=1.0.0',
     ],
     extras_require={
-        'matplotlib': ['matplotlib>=1.5.2'],
+        'tf': ['tensorflow>=1.12'],
+        # Evaluation of Hub modules with EMA variables requires TF > 1.12.
+        'tf_gpu': ['tf-nightly-gpu>=1.13.0.dev20190221'],
         'pillow': ['pillow>=5.0.0'],
-        'pandas': ['pandas>=0.23.0'],
-        'pstar': ['pstar>=0.1.6'],
-        'scipy': ['scipy>=1.0.0'],
-        'tensorflow': ['tensorflow>=1.7'],
-        'tensorflow_gpu': ['tensorflow-gpu>=1.4.1'],
+        'tensorflow-probability': ['tensorflow-probability>=0.5.0'],
     },
     classifiers=[
         'Development Status :: 4 - Beta',

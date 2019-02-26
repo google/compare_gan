@@ -1,0 +1,51 @@
+# BigGAN architecture and settings on ImageNet 128.
+# http://arxiv.org/abs/1809.11096
+
+# This should be similar to row 7 in Table 1.
+# It does not include orthogonal regularization (which would be row 8) and uses
+# a different learning rate.
+
+# Recommended training platform: TPU v3-128.
+
+dataset.name = "imagenet_128"
+options.z_dim = 120
+
+options.architecture = "resnet5_biggan_arch"
+ModularGAN.conditional = True
+options.batch_size = 2048
+options.gan_class = @ModularGAN
+options.lamba = 1
+options.training_steps = 250000
+weights.initializer = "orthogonal"
+spectral_norm.singular_value = "auto"
+
+# Generator
+G.batch_norm_fn = @conditional_batch_norm
+G.spectral_norm = True
+ModularGAN.g_use_ema = True
+resnet5_biggan.Generator.hierarchical_z = True
+resnet5_biggan.Generator.embed_y = True
+standardize_batch.decay = 0.9
+standardize_batch.epsilon = 1e-5
+standardize_batch.use_moving_averages = False
+
+# Discriminator
+options.disc_iters = 2
+D.spectral_norm = True
+resnet5_biggan.Discriminator.project_y = True
+
+# Loss and optimizer
+loss.fn = @hinge
+penalty.fn = @no_penalty
+ModularGAN.g_lr = 0.0001
+ModularGAN.g_optimizer_fn = @tf.train.AdamOptimizer
+ModularGAN.d_lr = 0.0005
+ModularGAN.d_optimizer_fn = @tf.train.AdamOptimizer
+tf.train.AdamOptimizer.beta1 = 0.0
+tf.train.AdamOptimizer.beta2 = 0.999
+
+z.distribution_fn = @tf.random.normal
+eval_z.distribution_fn = @tf.random.normal
+
+run_config.iterations_per_loop = 500
+run_config.save_checkpoints_steps = 2500
