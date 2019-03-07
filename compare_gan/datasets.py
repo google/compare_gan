@@ -57,6 +57,11 @@ flags.DEFINE_integer(
     "data_shuffle_buffer_size", 10000,
     "Number of examples for the shuffle buffer.")
 
+# Deprecated, only used for "replacing labels". TFDS will always use 64 threads.
+flags.DEFINE_integer(
+    "data_reading_num_threads", 64,
+    "The number of threads used to read the dataset.")
+
 
 class ImageDatasetV2(object):
   """Interface for Image datasets based on TFDS (TensorFlow Datasets).
@@ -190,7 +195,8 @@ class ImageDatasetV2(object):
     label_ds = label_ds.interleave(
         tf.data.TFRecordDataset,
         cycle_length=FLAGS.data_reading_num_threads)
-    return tf.data.Dataset.zip((ds, label_ds)).map(self._replace_label)
+    ds = tf.data.Dataset.zip((ds, label_ds)).map(self._replace_label)
+    return ds
 
   def _replace_label(self, feature_dict, new_unparsed_label):
     """Replaces the label from the feature_dict with the new label.
@@ -495,7 +501,7 @@ class ImagenetDataset(ImageDatasetV2):
   """ImageNet2012 as defined by TF Datasets."""
 
   def __init__(self, resolution, seed, filter_unlabeled=False):
-    if resolution not in [128, 256, 512]:
+    if resolution not in [64, 128, 256, 512]:
       raise ValueError("Unsupported resolution: {}".format(resolution))
     super(ImagenetDataset, self).__init__(
         name="imagenet_{}".format(resolution),
@@ -617,6 +623,7 @@ DATASETS = {
     "fashion-mnist": FashionMnistDataset,
     "lsun-bedroom": LsunBedroomDataset,
     "mnist": MnistDataset,
+    "imagenet_64": functools.partial(ImagenetDataset, resolution=64),
     "imagenet_128": functools.partial(ImagenetDataset, resolution=128),
     "imagenet_256": functools.partial(ImagenetDataset, resolution=256),
     "imagenet_512": functools.partial(ImagenetDataset, resolution=512),

@@ -22,12 +22,7 @@ from __future__ import print_function
 from absl import flags
 from absl import logging
 from compare_gan.architectures import arch_ops as ops
-from compare_gan.architectures import resnet5
-from compare_gan.architectures import resnet5_biggan
-from compare_gan.architectures import resnet_cifar
-from compare_gan.architectures import sndcgan
 
-from compare_gan.gans import consts as c
 from compare_gan.gans import loss_lib
 from compare_gan.gans import modular_gan
 from compare_gan.gans import utils
@@ -40,6 +35,7 @@ FLAGS = flags.FLAGS
 NUM_ROTATIONS = 4
 
 
+# pylint: disable=not-callable
 @gin.configurable(blacklist=["kwargs"])
 class S3GAN(modular_gan.ModularGAN):
   """S3GAN which enables auxiliary heads for the modular GAN."""
@@ -91,11 +87,13 @@ class S3GAN(modular_gan.ModularGAN):
 
     self._use_soft_labels = use_soft_labels
 
+    # To safe memory ModularGAN supports feeding real and fake samples
+    # separately through the discriminator. S3GAN does not support this to
+    # avoid additional additional complexity in create_loss().
     assert not self._deprecated_split_disc_calls, \
         "Splitting discriminator calls is not supported in S3GAN."
 
-  def discriminator(self, x, y, is_training, reuse=False,
-                    additional_outputs=False):
+  def discriminator_with_additonal_heads(self, x, y, is_training):
     """Discriminator architecture with additional heads.
 
     Possible heads built on top of feature representation of the discriminator:
@@ -106,9 +104,6 @@ class S3GAN(modular_gan.ModularGAN):
       x: An input image tensor.
       y: One-hot encoded label. Passing all zeros implies no label was passed.
       is_training: boolean, whether or not it is a training call.
-      reuse: boolean, whether or not to reuse the variables.
-      additional_outputs: If True return additional outputs auxiliary logits,
-        rotation logits and whether a label is available.
 
     Returns:
       Tuple of 5 Tensors: (1) discriminator predictions (in [0, 1]), (2) the
@@ -116,40 +111,33 @@ class S3GAN(modular_gan.ModularGAN):
       the auxiliary head, (4) logits of the class prediction from the auxiliary
       head, (5) Indicator vector identifying whether y contained a label or -1.
     """
+    d_probs, d_logits, x_rep = self.discriminator(
+        x, y=y, is_training=is_training)
+    use_sn = self.discriminator._spectral_norm  # pylint: disable=protected-access
+
     is_label_available = tf.cast(tf.cast(
         tf.reduce_sum(y, axis=1, keepdims=True), tf.float32) > 0.5, tf.float32)
-    d_probs, d_logits, x_rep = super(S3GAN, self).discriminator(
-        x, y=y, is_training=is_training, reuse=reuse)
     assert x_rep.shape.ndims == 2, x_rep.shape
-
-    # Hack to determine if D uses spectral normalization.
-
-    discriminator = {
-        c.RESNET5_ARCH: resnet5.Discriminator,
-        c.RESNET5_BIGGAN_ARCH: resnet5_biggan.Discriminator,
-        c.RESNET_CIFAR: resnet_cifar.Discriminator,
-        c.SNDCGAN_ARCH: sndcgan.Discriminator,
-    }[self._architecture]()
-    use_sn = discriminator._spectral_norm  # pylint: disable=protected-access
 
     # Predict the rotation of the image.
     rotation_logits = None
     if "rotation" in self._self_supervision:
-      with tf.variable_scope("discriminator_rotation", reuse=reuse):
-        rotation_logits = ops.linear(x_rep, NUM_ROTATIONS,
-                                     scope="score_classify", use_sn=use_sn)
+      with tf.variable_scope("discriminator_rotation", reuse=tf.AUTO_REUSE):
+        rotation_logits = ops.linear(
+            x_rep,
+            NUM_ROTATIONS,
+            scope="score_classify",
+            use_sn=use_sn)
         logging.info("[Discriminator] rotation head %s -> %s",
                      x_rep.shape, rotation_logits)
 
     if not self._project_y:
-      if additional_outputs:
-        return d_probs, d_logits, rotation_logits, None, is_label_available
-      return d_probs, d_logits, x_rep
+      return d_probs, d_logits, rotation_logits, None, is_label_available
 
     # Predict the class of the image.
     aux_logits = None
     if self._use_predictor:
-      with tf.variable_scope("discriminator_predictor", reuse=reuse):
+      with tf.variable_scope("discriminator_predictor", reuse=tf.AUTO_REUSE):
         aux_logits = ops.linear(x_rep, y.shape[1], use_bias=True,
                                 scope="predictor_linear", use_sn=use_sn)
         # Apply the projection discriminator if needed.
@@ -164,15 +152,13 @@ class S3GAN(modular_gan.ModularGAN):
                      aux_logits.shape, aux_logits.shape, y_predicted.shape)
 
     class_embedding = self.get_class_embedding(
-        y=y, embedding_dim=x_rep.shape[-1].value, reuse=reuse, use_sn=use_sn)
+        y=y, embedding_dim=x_rep.shape[-1].value, use_sn=use_sn)
     d_logits += tf.reduce_sum(class_embedding * x_rep, axis=1, keepdims=True)
     d_probs = tf.nn.sigmoid(d_logits)
-    if additional_outputs:
-      return d_probs, d_logits, rotation_logits, aux_logits, is_label_available
-    return d_probs, d_logits, x_rep
+    return d_probs, d_logits, rotation_logits, aux_logits, is_label_available
 
-  def get_class_embedding(self, y, embedding_dim, reuse, use_sn):
-    with tf.variable_scope("discriminator_projection", reuse=reuse):
+  def get_class_embedding(self, y, embedding_dim, use_sn):
+    with tf.variable_scope("discriminator_projection", reuse=tf.AUTO_REUSE):
       # We do not use ops.linear() below since it does not have an option to
       # override the initializer.
       kernel = tf.get_variable(
@@ -206,8 +192,7 @@ class S3GAN(modular_gan.ModularGAN):
                               fake_labels, fake_rotated_labels], 0)
     return all_features, all_labels
 
-  def create_loss(self, features, labels, params, is_training=True,
-                  reuse=False):
+  def create_loss(self, features, labels, params, is_training=True):
     """Build the loss tensors for discriminator and generator.
 
     This method will set self.d_loss and self.g_loss.
@@ -222,9 +207,6 @@ class S3GAN(modular_gan.ModularGAN):
           `tpu_context`. `batch_size` is the batch size for this core.
       is_training: If True build the model in training mode. If False build the
           model for inference mode (e.g. use trained averages for batch norm).
-      reuse: Bool, whether to reuse existing variables for the models.
-          This is only used for unrolling discriminator iterations when training
-          on TPU.
 
     Raises:
       ValueError: If set of meta/hyper parameters is not supported.
@@ -245,7 +227,7 @@ class S3GAN(modular_gan.ModularGAN):
     else:
       logging.warning("Computing fake images for every sub step separately.")
       fake_images = self.generator(
-          features["z"], y=fake_labels, is_training=is_training, reuse=reuse)
+          features["z"], y=fake_labels, is_training=is_training)
 
     bs = real_images.shape[0].value
     if self._self_supervision:
@@ -271,8 +253,8 @@ class S3GAN(modular_gan.ModularGAN):
         all_labels = tf.concat([real_labels, fake_labels], axis=0)
 
     d_predictions, d_logits, rot_logits, aux_logits, is_label_available = (
-        self.discriminator(all_features, y=all_labels, is_training=is_training,
-                           reuse=reuse, additional_outputs=True))
+        self.discriminator_with_additonal_heads(
+            x=all_features, y=all_labels, is_training=is_training))
 
     expected_batch_size = 2 * bs
     if self._self_supervision == "rotation":

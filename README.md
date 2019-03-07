@@ -52,6 +52,10 @@ including:
     Ting Chen, Xiaohua Zhai, Marvin Ritter, Mario Lucic, Neil Houlsby **[CVPR
     2019]**
 
+8.  [High-Fidelity Image Generation With Fewer Labels](https://arxiv.org/abs/1903.02271)
+    [<font color="green">[Code]</font>](https://github.com/google/compare_gan) \
+    Mario Lucic*, Michael Tschannen*, Marvin Ritter*, Xiaohua Zhai, Olivier
+    Bachem, Sylvain Gelly **[2019]**
 
 ## Installation
 
@@ -61,9 +65,9 @@ You can easily install the library and all necessary dependencies by running:
 ## Running experiments
 
 Simply run the `main.py` passing a `--model_dir` (this is where checkpoints are
-stored) and a `--gin_config` (defines which model on which data set and other
-options). We provide several example configurations in the `example_configs/`
-folder, namely:
+stored) and a `--gin_config` (defines which model is trained on which data set
+and other training options). We provide several example configurations in the
+`example_configs/` folder:
 
 *   **dcgan_celeba64**: DCGAN architecture with non-saturating loss on CelebA
     64x64px

@@ -10,7 +10,7 @@
 dataset.name = "imagenet_128"
 options.z_dim = 120
 
-options.architecture = "resnet5_biggan_arch"
+options.architecture = "resnet_biggan_arch"
 ModularGAN.conditional = True
 options.batch_size = 2048
 options.gan_class = @ModularGAN
@@ -23,8 +23,8 @@ spectral_norm.singular_value = "auto"
 G.batch_norm_fn = @conditional_batch_norm
 G.spectral_norm = True
 ModularGAN.g_use_ema = True
-resnet5_biggan.Generator.hierarchical_z = True
-resnet5_biggan.Generator.embed_y = True
+resnet_biggan.Generator.hierarchical_z = True
+resnet_biggan.Generator.embed_y = True
 standardize_batch.decay = 0.9
 standardize_batch.epsilon = 1e-5
 standardize_batch.use_moving_averages = False
@@ -32,7 +32,7 @@ standardize_batch.use_moving_averages = False
 # Discriminator
 options.disc_iters = 2
 D.spectral_norm = True
-resnet5_biggan.Discriminator.project_y = True
+resnet_biggan.Discriminator.project_y = True
 
 # Loss and optimizer
 loss.fn = @hinge

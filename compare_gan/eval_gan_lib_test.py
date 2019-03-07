@@ -79,9 +79,8 @@ class EvalGanLibTest(parameterized.TestCase, tf.test.TestCase):
   @flagsaver.flagsaver
   def test_end2end_checkpoint(self, architecture):
     """Takes real GAN (trained for 1 step) and evaluate it."""
-    if architecture in {c.RESNET5_ABLATION, c.RESNET_STL, c.RESNET30_ARCH}:
-      # RESNET5_ABLATION is not supported by ModularGAN.
-      # RESNET_STL and RESNET107_ARCH does to support Cifar image shape.
+    if architecture in {c.RESNET_STL_ARCH, c.RESNET30_ARCH}:
+      # RESNET_STL_ARCH and RESNET107_ARCH do not support CIFAR image shape.
       return
     gin.bind_parameter("dataset.name", "cifar10")
     dataset = datasets.get_dataset("cifar10")

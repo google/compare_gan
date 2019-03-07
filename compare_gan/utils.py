@@ -156,3 +156,19 @@ def get_parameter_overview(variables, limit=40):
   lines.append("Total: {:,}".format(total_weights))
 
   return "\n".join(lines)
+
+
+def log_parameter_overview(variables, msg):
+  """Writes a table with variables name and shapes to INFO log.
+
+    See get_parameter_overview for details.
+
+  Args:
+    variables: List of `tf.Variable`(s).
+    msg: Message to be logged before the table.
+  """
+  table = get_parameter_overview(variables, limit=None)
+  # The table can to large to fit into one log entry.
+  lines = [msg] + table.split("\n")
+  for i in range(0, len(lines), 80):
+    logging.info("\n%s", "\n".join(lines[i:i + 80]))

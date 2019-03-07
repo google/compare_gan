@@ -1,8 +1,10 @@
 
+# Recommended training platform: P100, V100, TPU v2-8 or TPU v3-8
+
 dataset.name = "celeb_a"
 options.architecture = "dcgan_arch"
 options.batch_size = 64
-options.gan_class = @GPUModularGAN
+options.gan_class = @ModularGAN
 options.lamba = 1
 options.training_steps = 100000
 options.z_dim = 128

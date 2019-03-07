@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Re-implementation of BigGAN architecture.
+"""Re-implementation of BigGAN-Deep architecture.
 
 Disclaimer: We note that this is our best-effort re-implementation and stress
 that even minor implementation differences may lead to large differences in
@@ -24,47 +24,28 @@ reproduce the reported FID on ImageNet 128x128.
 Based on "Large Scale GAN Training for High Fidelity Natural Image Synthesys",
 Brock A. et al., 2018 [https://arxiv.org/abs/1809.11096].
 
-Supported resolutions: 32, 64, 128, 256, 512. The location of the self-attention
-block must be set in the Gin config. See below.
+Supported resolutions: 32, 64, 128, 256, 512.
 
-Notable differences to resnet5.py:
-- Much wider layers by default.
-- 1x1 convs for shortcuts in D and G blocks.
-- Last BN in G is unconditional.
-- tanh activation in G.
-- No shortcut in D block if in_channels == out_channels.
-- sum pooling instead of mean pooling in D.
-- Last block in D does not downsample.
-
-Information related to parameter counts and Gin configuration:
-128x128
--------
-Number of parameters: (D) 87,982,370 (G) 70,433,988
-Required Gin settings:
-options.z_dim = 120
-resnet5_biggan.Generator.blocks_with_attention = "B4"
-resnet5_biggan.Discriminator.blocks_with_attention = "B1"
-
-256x256
--------
-Number of parameters: (D) 98,635,298 (G) 82,097,604
-Required Gin settings:
-options.z_dim = 140
-resnet5_biggan.Generator.blocks_with_attention = "B5"
-resnet5_biggan.Discriminator.blocks_with_attention = "B2"
-
-512x512
--------
-Number of parameters: (D)  98,801,378 (G) 82,468,068
-Required Gin settings:
-options.z_dim = 160
-resnet5_biggan.Generator.blocks_with_attention = "B4"
-resnet5_biggan.Discriminator.blocks_with_attention = "B3"
+Differences to original BigGAN:
+- The self-attention block is always applied at a resolution of 64x64.
+- Each batch norm gets the concatenation of the z and the class embedding. z is
+  not chunked.
+- The channel width multiplier defaults to 128 instead of 96.
+- Double amount of ResNet blocks:
+- Residual blocks have bottlenecks:
+  - 1x1 convolution reduces number of channels before the 3x3 convolutions.
+  - After the 3x3 convolutions a 1x1 creates the desired number of out channels.
+- Skip connections in residual connections preserve identity (no 1x1 conv).
+  - In G, to reduce the number of channels, drop additional chhannels.
+  - In D add more channels by doing a 1x1 convolution.
+- Mean instead of sum pooling in D after the final ReLU.
 """
 
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
+
+import functools
 
 from absl import logging
 
@@ -77,27 +58,64 @@ from six.moves import range
 import tensorflow as tf
 
 
-@gin.configurable(whitelist=["sc_kernel_size"])
-class BigGanResNetBlock(resnet_ops.ResNetBlock):
-  """ResNet block with options for various normalizations.
-
-  This block uses a 1x1 convolution for the (optional) shortcut connection.
-  """
+@gin.configurable
+class BigGanDeepResNetBlock(object):
+  """ResNet block with bottleneck and identity preserving skip connections."""
 
   def __init__(self,
-               add_shortcut=True,
-               sc_kernel_size=1,
-               **kwargs):
-    """Constructs a new ResNet block for BigGAN.
+               name,
+               in_channels,
+               out_channels,
+               scale,
+               spectral_norm=False,
+               batch_norm=None):
+    """Constructs a new ResNet block with bottleneck.
 
     Args:
-      add_shortcut: Whether to add a shortcut connection.
-      sc_kernel_size: Integer, kernel size to use for shortcut connections.
-      **kwargs: Additional arguments for ResNetBlock.
+      name: Scope name for the resent block.
+      in_channels: Integer, the input channel size.
+      out_channels: Integer, the output channel size.
+      scale: Whether or not to scale up or down, choose from "up", "down" or
+        "none".
+      spectral_norm: Use spectral normalization for all weights.
+      batch_norm: Function for batch normalization.
     """
-    super(BigGanResNetBlock, self).__init__(**kwargs)
-    self._add_shortcut = add_shortcut
-    self._sc_kernel_size = (sc_kernel_size, sc_kernel_size)
+    assert scale in ["up", "down", "none"]
+    self._name = name
+    self._in_channels = in_channels
+    self._out_channels = out_channels
+    self._scale = scale
+    self._spectral_norm = spectral_norm
+    self.batch_norm = batch_norm
+
+  def __call__(self, inputs, z, y, is_training):
+    return self.apply(inputs=inputs, z=z, y=y, is_training=is_training)
+
+  def _shortcut(self, inputs):
+    """Constructs a skip connection from inputs."""
+    with tf.variable_scope("shortcut", values=[inputs]):
+      shortcut = inputs
+      num_channels = inputs.shape[-1].value
+      if num_channels > self._out_channels:
+        assert self._scale == "up"
+        # Drop redundant channels.
+        logging.info("[Shortcut] Dropping %d channels in shortcut.",
+                     num_channels - self._out_channels)
+        shortcut = shortcut[:, :, :, :self._out_channels]
+      if self._scale == "up":
+        shortcut = resnet_ops.unpool(shortcut)
+      if self._scale == "down":
+        shortcut = tf.nn.pool(shortcut, [2, 2], "AVG", "SAME",
+                              strides=[2, 2], name="pool")
+      if num_channels < self._out_channels:
+        assert self._scale == "down"
+        # Increase number of channels if necessary.
+        num_missing = self._out_channels - num_channels
+        logging.info("[Shortcut] Adding %d channels in shortcut.", num_missing)
+        added = ops.conv1x1(shortcut, num_missing, name="add_channels",
+                            use_sn=self._spectral_norm)
+        shortcut = tf.concat([shortcut, added], axis=-1)
+      return shortcut
 
   def apply(self, inputs, z, y, is_training):
     """"ResNet block containing possible down/up sampling, shared for G / D.
@@ -118,36 +136,43 @@ class BigGanResNetBlock(resnet_ops.ResNetBlock):
           "Unexpected number of input channels (expected {}, got {}).".format(
               self._in_channels, inputs.shape[-1].value))
 
+    bottleneck_channels = max(self._in_channels, self._out_channels) // 4
+    bn = functools.partial(self.batch_norm, z=z, y=y, is_training=is_training)
+    conv1x1 = functools.partial(ops.conv1x1, use_sn=self._spectral_norm)
+    conv3x3 = functools.partial(ops.conv2d, k_h=3, k_w=3, d_h=1, d_w=1,
+                                use_sn=self._spectral_norm)
+
     with tf.variable_scope(self._name, values=[inputs]):
       outputs = inputs
 
-      outputs = self.batch_norm(
-          outputs, z=z, y=y, is_training=is_training, name="bn1")
-      if self._layer_norm:
-        outputs = ops.layer_norm(outputs, is_training=is_training, scope="ln1")
+      with tf.variable_scope("conv1", values=[outputs]):
+        outputs = bn(outputs, name="bn")
+        outputs = tf.nn.relu(outputs)
+        outputs = conv1x1(outputs, bottleneck_channels, name="1x1_conv")
 
-      outputs = tf.nn.relu(outputs)
-      outputs = self._get_conv(
-          outputs, self._in_channels, self._out_channels, self._scale1,
-          suffix="conv1")
+      with tf.variable_scope("conv2", values=[outputs]):
+        outputs = bn(outputs, name="bn")
+        outputs = tf.nn.relu(outputs)
+        if self._scale == "up":
+          outputs = resnet_ops.unpool(outputs)
+        outputs = conv3x3(outputs, bottleneck_channels, name="3x3_conv")
 
-      outputs = self.batch_norm(
-          outputs, z=z, y=y, is_training=is_training, name="bn2")
-      if self._layer_norm:
-        outputs = ops.layer_norm(outputs, is_training=is_training, scope="ln2")
+      with tf.variable_scope("conv3", values=[outputs]):
+        outputs = bn(outputs, name="bn")
+        outputs = tf.nn.relu(outputs)
+        outputs = conv3x3(outputs, bottleneck_channels, name="3x3_conv")
 
-      outputs = tf.nn.relu(outputs)
-      outputs = self._get_conv(
-          outputs, self._out_channels, self._out_channels, self._scale2,
-          suffix="conv2")
+      with tf.variable_scope("conv4", values=[outputs]):
+        outputs = bn(outputs, name="bn")
+        outputs = tf.nn.relu(outputs)
+        if self._scale == "down":
+          outputs = tf.nn.pool(outputs, [2, 2], "AVG", "SAME", strides=[2, 2],
+                               name="avg_pool")
+        outputs = conv1x1(outputs, self._out_channels, name="1x1_conv")
 
-      # Combine skip-connection with the convolved part.
-      if self._add_shortcut:
-        shortcut = self._get_conv(
-            inputs, self._in_channels, self._out_channels, self._scale,
-            kernel_size=self._sc_kernel_size,
-            suffix="conv_shortcut")
-        outputs += shortcut
+      # Add skip-connection.
+      outputs += self._shortcut(inputs)
+
       logging.info("[Block] %s (z=%s, y=%s) -> %s", inputs.shape,
                    None if z is None else z.shape,
                    None if y is None else y.shape, outputs.shape)
@@ -159,64 +184,53 @@ class Generator(abstract_arch.AbstractGenerator):
   """ResNet-based generator supporting resolutions 32, 64, 128, 256, 512."""
 
   def __init__(self,
-               ch=96,
-               blocks_with_attention="B4",
-               hierarchical_z=True,
-               embed_z=False,
+               ch=128,
                embed_y=True,
                embed_y_dim=128,
-               embed_bias=False,
+               experimental_fast_conv_to_rgb=False,
                **kwargs):
     """Constructor for BigGAN generator.
 
     Args:
       ch: Channel multiplier.
-      blocks_with_attention: Comma-separated list of blocks that are followed by
-        a non-local block.
-      hierarchical_z: Split z into chunks and only give one chunk to each.
-        Each chunk will also be concatenated to y, the one hot encoded labels.
-      embed_z: If True use a learnable embedding of z that is used instead.
-        The embedding will have the length of z.
       embed_y: If True use a learnable embedding of y that is used instead.
       embed_y_dim: Size of the embedding of y.
-      embed_bias: Use bias with for the embedding of z and y.
+      experimental_fast_conv_to_rgb: If True optimize the last convolution to
+        sacrifize memory for better speed.
       **kwargs: additional arguments past on to ResNetGenerator.
     """
     super(Generator, self).__init__(**kwargs)
     self._ch = ch
-    self._blocks_with_attention = set(blocks_with_attention.split(","))
-    self._hierarchical_z = hierarchical_z
-    self._embed_z = embed_z
     self._embed_y = embed_y
     self._embed_y_dim = embed_y_dim
-    self._embed_bias = embed_bias
+    self._experimental_fast_conv_to_rgb = experimental_fast_conv_to_rgb
 
   def _resnet_block(self, name, in_channels, out_channels, scale):
     """ResNet block for the generator."""
     if scale not in ["up", "none"]:
       raise ValueError(
           "Unknown generator ResNet block scaling: {}.".format(scale))
-    return BigGanResNetBlock(
+    return BigGanDeepResNetBlock(
         name=name,
         in_channels=in_channels,
         out_channels=out_channels,
         scale=scale,
-        is_gen_block=True,
         spectral_norm=self._spectral_norm,
         batch_norm=self.batch_norm)
 
   def _get_in_out_channels(self):
+    # See Table 7-9.
     resolution = self._image_shape[0]
     if resolution == 512:
-      channel_multipliers = [16, 16, 8, 8, 4, 2, 1, 1]
+      channel_multipliers = 4 * [16] + 4 * [8] + [4, 4, 2, 2, 1, 1, 1]
     elif resolution == 256:
-      channel_multipliers = [16, 16, 8, 8, 4, 2, 1]
+      channel_multipliers = 4 * [16] + 4 * [8] + [4, 4, 2, 2, 1]
     elif resolution == 128:
-      channel_multipliers = [16, 16, 8, 4, 2, 1]
+      channel_multipliers = 4 * [16] + 2 * [8] + [4, 4, 2, 2, 1]
     elif resolution == 64:
-      channel_multipliers = [16, 16, 8, 4, 2]
+      channel_multipliers = 4 * [16] + 2 * [8] + [4, 4, 2]
     elif resolution == 32:
-      channel_multipliers = [4, 4, 4, 4]
+      channel_multipliers = 8 * [4]
     else:
       raise ValueError("Unsupported resolution: {}".format(resolution))
     in_channels = [self._ch * c for c in channel_multipliers[:-1]]
@@ -237,36 +251,21 @@ class Generator(abstract_arch.AbstractGenerator):
     """
     shape_or_none = lambda t: None if t is None else t.shape
     logging.info("[Generator] inputs are z=%s, y=%s", z.shape, shape_or_none(y))
-    # Each block upscales by a factor of 2.
     seed_size = 4
-    z_dim = z.shape[1].value
+
+    if self._embed_y:
+      y = ops.linear(y, self._embed_y_dim, scope="embed_y", use_sn=False,
+                     use_bias=False)
+    if y is not None:
+      y = tf.concat([z, y], axis=1)
+      z = y
 
     in_channels, out_channels = self._get_in_out_channels()
     num_blocks = len(in_channels)
 
-    if self._embed_z:
-      z = ops.linear(z, z_dim, scope="embed_z", use_sn=False,
-                     use_bias=self._embed_bias)
-    if self._embed_y:
-      y = ops.linear(y, self._embed_y_dim, scope="embed_y", use_sn=False,
-                     use_bias=self._embed_bias)
-    y_per_block = num_blocks * [y]
-    if self._hierarchical_z:
-      z_per_block = tf.split(z, num_blocks + 1, axis=1)
-      z0, z_per_block = z_per_block[0], z_per_block[1:]
-      if y is not None:
-        y_per_block = [tf.concat([zi, y], 1) for zi in z_per_block]
-    else:
-      z0 = z
-      z_per_block = num_blocks * [z]
-
-    logging.info("[Generator] z0=%s, z_per_block=%s, y_per_block=%s",
-                 z0.shape, [str(shape_or_none(t)) for t in z_per_block],
-                 [str(shape_or_none(t)) for t in y_per_block])
-
     # Map noise to the actual seed.
     net = ops.linear(
-        z0,
+        z,
         in_channels[0] * seed_size * seed_size,
         scope="fc_noise",
         use_sn=self._spectral_norm)
@@ -277,18 +276,15 @@ class Generator(abstract_arch.AbstractGenerator):
         name="fc_reshaped")
 
     for block_idx in range(num_blocks):
-      name = "B{}".format(block_idx + 1)
+      scale = "none" if block_idx % 2 == 0 else "up"
       block = self._resnet_block(
-          name=name,
+          name="B{}".format(block_idx + 1),
           in_channels=in_channels[block_idx],
           out_channels=out_channels[block_idx],
-          scale="up")
-      net = block(
-          net,
-          z=z_per_block[block_idx],
-          y=y_per_block[block_idx],
-          is_training=is_training)
-      if name in self._blocks_with_attention:
+          scale=scale)
+      net = block(net, z=z, y=y, is_training=is_training)
+      # At resolution 64x64 there is a self-attention block.
+      if scale == "up" and net.shape[1].value == 64:
         logging.info("[Generator] Applying non-local block to %s", net.shape)
         net = ops.non_local_block(net, "non_local_block",
                                   use_sn=self._spectral_norm)
@@ -297,9 +293,17 @@ class Generator(abstract_arch.AbstractGenerator):
     logging.info("[Generator] before final processing: %s", net.shape)
     net = ops.batch_norm(net, is_training=is_training, name="final_norm")
     net = tf.nn.relu(net)
-    net = ops.conv2d(net, output_dim=self._image_shape[2], k_h=3, k_w=3,
-                     d_h=1, d_w=1, name="final_conv",
-                     use_sn=self._spectral_norm)
+    colors = self._image_shape[2]
+    if self._experimental_fast_conv_to_rgb:
+
+      net = ops.conv2d(net, output_dim=128, k_h=3, k_w=3,
+                       d_h=1, d_w=1, name="final_conv",
+                       use_sn=self._spectral_norm)
+      net = net[:, :, :, :colors]
+    else:
+      net = ops.conv2d(net, output_dim=colors, k_h=3, k_w=3,
+                       d_h=1, d_w=1, name="final_conv",
+                       use_sn=self._spectral_norm)
     logging.info("[Generator] after final processing: %s", net.shape)
     net = (tf.nn.tanh(net) + 1.0) / 2.0
     return net
@@ -310,7 +314,7 @@ class Discriminator(abstract_arch.AbstractDiscriminator):
   """ResNet-based discriminator supporting resolutions 32, 64, 128, 256, 512."""
 
   def __init__(self,
-               ch=96,
+               ch=128,
                blocks_with_attention="B1",
                project_y=True,
                **kwargs):
@@ -333,34 +337,32 @@ class Discriminator(abstract_arch.AbstractDiscriminator):
     if scale not in ["down", "none"]:
       raise ValueError(
           "Unknown discriminator ResNet block scaling: {}.".format(scale))
-    return BigGanResNetBlock(
+    return BigGanDeepResNetBlock(
         name=name,
         in_channels=in_channels,
         out_channels=out_channels,
         scale=scale,
-        is_gen_block=False,
-        add_shortcut=in_channels != out_channels,
-        layer_norm=self._layer_norm,
         spectral_norm=self._spectral_norm,
         batch_norm=self.batch_norm)
 
   def _get_in_out_channels(self, colors, resolution):
+    # See Table 7-9.
     if colors not in [1, 3]:
       raise ValueError("Unsupported color channels: {}".format(colors))
     if resolution == 512:
-      channel_multipliers = [1, 1, 2, 4, 8, 8, 16, 16]
+      channel_multipliers = [1, 1, 1, 2, 2, 4, 4] + 4 * [8] + 4 * [16]
     elif resolution == 256:
-      channel_multipliers = [1, 2, 4, 8, 8, 16, 16]
+      channel_multipliers = [1, 2, 2, 4, 4] + 4 * [8] + 4 * [16]
     elif resolution == 128:
-      channel_multipliers = [1, 2, 4, 8, 16, 16]
+      channel_multipliers = [1, 2, 2, 4, 4] + 2 * [8] + 4 * [16]
     elif resolution == 64:
-      channel_multipliers = [2, 4, 8, 16, 16]
+      channel_multipliers = [2, 4, 4] + 2 * [8] + 4 * [16]
     elif resolution == 32:
-      channel_multipliers = [2, 2, 2, 2]
+      channel_multipliers = 8 * [2]
     else:
       raise ValueError("Unsupported resolution: {}".format(resolution))
-    out_channels = [self._ch * c for c in channel_multipliers]
-    in_channels = [colors] + out_channels[:-1]
+    in_channels = [self._ch * c for c in channel_multipliers[:-1]]
+    out_channels = [self._ch * c for c in channel_multipliers[1:]]
     return in_channels, out_channels
 
   def apply(self, x, y, is_training):
@@ -386,17 +388,20 @@ class Discriminator(abstract_arch.AbstractDiscriminator):
         colors=x.shape[-1].value, resolution=x.shape[1].value)
     num_blocks = len(in_channels)
 
-    net = x
+    net = ops.conv2d(x, output_dim=in_channels[0], k_h=3, k_w=3,
+                     d_h=1, d_w=1, name="initial_conv",
+                     use_sn=self._spectral_norm)
+
     for block_idx in range(num_blocks):
-      name = "B{}".format(block_idx + 1)
-      is_last_block = block_idx == num_blocks - 1
+      scale = "down" if block_idx % 2 == 0 else "none"
       block = self._resnet_block(
-          name=name,
+          name="B{}".format(block_idx + 1),
           in_channels=in_channels[block_idx],
           out_channels=out_channels[block_idx],
-          scale="none" if is_last_block else "down")
+          scale=scale)
       net = block(net, z=None, y=y, is_training=is_training)
-      if name in self._blocks_with_attention:
+      # At resolution 64x64 there is a self-attention block.
+      if scale == "none" and net.shape[1].value == 64:
         logging.info("[Discriminator] Applying non-local block to %s",
                      net.shape)
         net = ops.non_local_block(net, "non_local_block",

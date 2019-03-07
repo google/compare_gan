@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Test whether resnet5_biggan matches the original BigGAN architecture.
+"""Test whether resnet_biggan matches the original BigGAN architecture.
 
 """
 
@@ -24,7 +24,7 @@ from __future__ import print_function
 from absl import logging
 from compare_gan import utils
 from compare_gan.architectures import arch_ops
-from compare_gan.architectures import resnet5_biggan
+from compare_gan.architectures import resnet_biggan
 import gin
 import numpy as np
 import tensorflow as tf
@@ -92,12 +92,12 @@ class ResNet5BigGanTest(tf.test.TestCase):
       batch_size = 16
       z = tf.zeros((batch_size, 120))
       y = tf.one_hot(tf.ones((batch_size,), dtype=tf.int32), 1000)
-      generator = resnet5_biggan.Generator(
+      generator = resnet_biggan.Generator(
           image_shape=(128, 128, 3),
           batch_norm_fn=arch_ops.conditional_batch_norm)
       fake_images = generator(z, y=y, is_training=True, reuse=False)
       self.assertEqual(fake_images.shape.as_list(), [batch_size, 128, 128, 3])
-      discriminator = resnet5_biggan.Discriminator()
+      discriminator = resnet_biggan.Discriminator()
       predictions = discriminator(fake_images, y, is_training=True)
       self.assertLen(predictions, 3)
 
@@ -158,11 +158,11 @@ class ResNet5BigGanTest(tf.test.TestCase):
     with tf.Graph().as_default():
       z = tf.zeros((8, 120))
       y = tf.one_hot(tf.ones((8,), dtype=tf.int32), 1000)
-      generator = resnet5_biggan.Generator(
+      generator = resnet_biggan.Generator(
           image_shape=(128, 128, 3),
           batch_norm_fn=arch_ops.conditional_batch_norm)
       fake_images = generator(z, y=y, is_training=True, reuse=False)
-      discriminator = resnet5_biggan.Discriminator()
+      discriminator = resnet_biggan.Discriminator()
       discriminator(fake_images, y, is_training=True)
 
       for v in tf.trainable_variables():

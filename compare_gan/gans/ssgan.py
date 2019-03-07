@@ -19,16 +19,9 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import functools
-
 from absl import flags
 from absl import logging
-from compare_gan.architectures import resnet5
-from compare_gan.architectures import resnet5_biggan
-from compare_gan.architectures import resnet_cifar
-from compare_gan.architectures import sndcgan
 from compare_gan.architectures.arch_ops import linear
-from compare_gan.gans import consts as c
 from compare_gan.gans import loss_lib
 from compare_gan.gans import modular_gan
 from compare_gan.gans import penalty_lib
@@ -42,6 +35,7 @@ FLAGS = flags.FLAGS
 NUM_ROTATIONS = 4
 
 
+# pylint: disable=not-callable
 @gin.configurable(blacklist=["kwargs"])
 class SSGAN(modular_gan.ModularGAN):
   """Self-Supervised GAN.
@@ -77,16 +71,19 @@ class SSGAN(modular_gan.ModularGAN):
     self._weight_rotation_loss_d = weight_rotation_loss_d
     self._weight_rotation_loss_g = weight_rotation_loss_g
 
-  def discriminator(self, x, y, is_training, reuse=False, rotation_head=False):
+    # To safe memory ModularGAN supports feeding real and fake samples
+    # separately through the discriminator. SSGAN does not support this to
+    # avoid additional additional complexity in create_loss().
+    assert not self._deprecated_split_disc_calls, \
+        "Splitting discriminator calls is not supported in SSGAN."
+
+  def discriminator_with_rotation_head(self, x, y, is_training):
     """Discriminator network with augmented auxiliary predictions.
 
     Args:
       x: an input image tensor.
       y: Tensor with label indices.
       is_training: boolean, whether or not it is a training call.
-      reuse: boolean, whether or not to reuse the variables.
-      rotation_head: If True add a rotation head on top of the discriminator
-        logits.
 
     Returns:
       real_probs: the [0, 1] probability tensor of x being real images.
@@ -94,34 +91,17 @@ class SSGAN(modular_gan.ModularGAN):
       rotation_scores: the categorical probablity of x being rotated in one of
         the four directions.
     """
-    if not rotation_head:
-      return super(SSGAN, self).discriminator(
-          x, y=y, is_training=is_training, reuse=reuse)
-
-    real_probs, real_scores, final = super(SSGAN, self).discriminator(
-        x, y=y, is_training=is_training, reuse=reuse)
-
-    # Hack to get whether to use spectral norm for the rotation head below.
-    # Spectral norm is configured on the architecture (AbstractGenerator or
-    # AbstrtactDiscriminator). The layer below is be part of the architecture.
-
-    discriminator = {
-        c.RESNET5_ARCH: resnet5.Discriminator,
-        c.RESNET5_BIGGAN_ARCH: resnet5_biggan.Discriminator,
-        c.RESNET_CIFAR: resnet_cifar.Discriminator,
-        c.SNDCGAN_ARCH: sndcgan.Discriminator,
-    }[self._architecture]()
-    use_sn = discriminator._spectral_norm  # pylint: disable=protected-access
-
-    with tf.variable_scope("discriminator_rotation", reuse=reuse):
+    real_probs, real_scores, final = self.discriminator(
+        x=x, y=y, is_training=is_training)
+    use_sn = self._discriminator._spectral_norm  # pylint: disable=protected-access
+    with tf.variable_scope("discriminator_rotation", reuse=tf.AUTO_REUSE):
       rotation_scores = linear(tf.reshape(final, (tf.shape(x)[0], -1)),
                                NUM_ROTATIONS,
                                scope="score_classify",
                                use_sn=use_sn)
     return real_probs, real_scores, rotation_scores
 
-  def create_loss(self, features, labels, params, is_training=True,
-                  reuse=False):
+  def create_loss(self, features, labels, params, is_training=True):
     """Build the loss tensors for discriminator and generator.
 
     This method will set self.d_loss and self.g_loss.
@@ -136,14 +116,12 @@ class SSGAN(modular_gan.ModularGAN):
           `tpu_context`. `batch_size` is the batch size for this core.
       is_training: If True build the model in training mode. If False build the
           model for inference mode (e.g. use trained averages for batch norm).
-      reuse: Bool, whether to reuse existing variables for the models.
-          This is only used for unrolling discriminator iterations when training
-          on TPU.
 
     Raises:
       ValueError: If set of meta/hyper parameters is not supported.
     """
     images = features["images"]  # Input images.
+    generated = features["generated"]  # Fake images.
     if self.conditional:
       y = self._get_one_hot_labels(labels)
       sampled_y = self._get_one_hot_labels(features["sampled_labels"])
@@ -152,17 +130,8 @@ class SSGAN(modular_gan.ModularGAN):
       sampled_y = None
       all_y = None
 
-    if self._experimental_joint_gen_for_disc:
-      assert "generated" in features
-      generated = features["generated"]
-    else:
-      logging.warning("Computing fake images for every sub step separately.")
-      z = features["z"]  # Noise vector.
-      generated = self.generator(
-          z, y=sampled_y, is_training=is_training, reuse=reuse)
-
     # Batch size per core.
-    bs = params["batch_size"] // self.num_sub_steps
+    bs = images.shape[0].value
     num_replicas = params["context"].num_replicas if "context" in params else 1
     assert self._rotated_batch_size % num_replicas == 0
     # Rotated batch size per core.
@@ -203,9 +172,8 @@ class SSGAN(modular_gan.ModularGAN):
         all_y = tf.concat([y, sampled_y], axis=0)
 
     # Compute discriminator output for real and fake images in one batch.
-    d_all, d_all_logits, c_all_logits = self.discriminator(
-        all_images, y=all_y, is_training=is_training, reuse=reuse,
-        rotation_head=True)
+    d_all, d_all_logits, c_all_logits = self.discriminator_with_rotation_head(
+        all_images, y=all_y, is_training=is_training)
     d_real, d_fake = tf.split(d_all, 2)
     d_real_logits, d_fake_logits = tf.split(d_all_logits, 2)
     c_real_logits, c_fake_logits = tf.split(c_all_logits, 2)
@@ -220,10 +188,9 @@ class SSGAN(modular_gan.ModularGAN):
         d_real=d_real, d_fake=d_fake, d_real_logits=d_real_logits,
         d_fake_logits=d_fake_logits)
 
-    discriminator = functools.partial(self.discriminator, y=y)
     penalty_loss = penalty_lib.get_penalty_loss(
-        x=images, x_fake=generated, is_training=is_training,
-        discriminator=discriminator, architecture=self._architecture)
+        x=images, x_fake=generated, y=y, is_training=is_training,
+        discriminator=self.discriminator, architecture=self._architecture)
     self.d_loss += self._lambda * penalty_loss
 
     # Add rotation augmented loss.
@@ -255,7 +222,5 @@ class SSGAN(modular_gan.ModularGAN):
     self._tpu_summary.scalar("loss/c_real_loss", c_real_loss)
     self._tpu_summary.scalar("loss/c_fake_loss", c_fake_loss)
     self._tpu_summary.scalar("accuracy/d_rotation", accuracy)
-    self._tpu_summary.scalar("loss/d", self.d_loss)
-    self._tpu_summary.scalar("loss/g", self.g_loss)
     self._tpu_summary.scalar("loss/penalty", penalty_loss)
 

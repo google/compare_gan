@@ -1,8 +1,10 @@
 
+# Recommended training platform: P100, V100, TPU v2-8 or TPU v3-8
+
 dataset.name = "cifar10"
 options.architecture = "resnet_cifar_arch"
 options.batch_size = 64
-options.gan_class = @GPUModularGAN
+options.gan_class = @ModularGAN
 options.lamba = 1
 options.training_steps = 40000
 options.z_dim = 128

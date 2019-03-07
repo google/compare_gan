@@ -24,7 +24,7 @@ from compare_gan.architectures import dcgan
 from compare_gan.architectures import infogan
 from compare_gan.architectures import resnet30
 from compare_gan.architectures import resnet5
-from compare_gan.architectures import resnet5_biggan
+from compare_gan.architectures import resnet_biggan
 from compare_gan.architectures import resnet_cifar
 from compare_gan.architectures import resnet_stl
 from compare_gan.architectures import sndcgan
@@ -116,8 +116,8 @@ class ArchitectureTest(parameterized.TestCase, tf.test.TestCase):
       z_dim = 120
     # Use channel multiplier 4 to avoid OOM errors.
     self.assertArchitectureBuilds(
-        gen=resnet5_biggan.Generator(image_shape=image_shape, ch=16),
-        disc=resnet5_biggan.Discriminator(ch=16),
+        gen=resnet_biggan.Generator(image_shape=image_shape, ch=16),
+        disc=resnet_biggan.Discriminator(ch=16),
         image_shape=image_shape,
         z_dim=z_dim)
 

@@ -27,46 +27,21 @@ from absl.testing import flagsaver
 from absl.testing import parameterized
 
 from compare_gan import eval_gan_lib
-from compare_gan import eval_utils
 from compare_gan import runner_lib
+from compare_gan import test_utils
 from compare_gan.architectures import arch_ops
 from compare_gan.gans.modular_gan import ModularGAN
 
 import gin
 import numpy as np
+from six.moves import range
 import tensorflow as tf
+
 
 FLAGS = flags.FLAGS
 
 
-class RunnerLibTest(parameterized.TestCase, tf.test.TestCase):
-
-  def _create_fake_inception_graph(self):
-    """Creates a graph with that mocks inception.
-
-    It takes the input, multiplies it through a matrix full of 0.001 values
-    and returns as logits. It makes sure to match the tensor names of
-    the real inception model.
-
-    Returns:
-      tf.Graph object with a simple mock inception inside.
-    """
-    fake_inception = tf.Graph()
-    with fake_inception.as_default():
-      graph_input = tf.placeholder(
-          tf.float32, shape=[None, 299, 299, 3], name="Mul")
-      matrix = tf.ones(shape=[299 * 299 * 3, 10]) * 0.00001
-      output = tf.matmul(tf.layers.flatten(graph_input), matrix)
-      output = tf.identity(output, name="pool_3")
-      output = tf.identity(output, name="logits")
-    return fake_inception
-
-  def setUp(self):
-    super(RunnerLibTest, self).setUp()
-    FLAGS.data_fake_dataset = True
-    gin.clear_config()
-    inception_graph = self._create_fake_inception_graph()
-    eval_utils.INCEPTION_GRAPH = inception_graph.as_graph_def()
+class RunnerLibTest(parameterized.TestCase, test_utils.CompareGanTestCase):
 
   @parameterized.named_parameters([
       ("SameSeeds", 42, 42),
@@ -86,11 +61,11 @@ class RunnerLibTest(parameterized.TestCase, tf.test.TestCase):
         "training_steps": 1,
         "z_dim": 128,
     }
+    work_dir = self._get_empty_model_dir()
+    seeds = [seed1, seed2]
     for i in range(2):
-      seed = seed1 if i == 0 else seed2
-      model_dir = os.path.join(FLAGS.test_tmpdir, str(i))
-      if tf.gfile.Exists(model_dir):
-        tf.gfile.DeleteRecursively(model_dir)
+      model_dir = os.path.join(work_dir, str(i))
+      seed = seeds[i]
       run_config = tf.contrib.tpu.RunConfig(
           model_dir=model_dir, tf_random_seed=seed)
       task_manager = runner_lib.TaskManager(model_dir)
@@ -101,8 +76,8 @@ class RunnerLibTest(parameterized.TestCase, tf.test.TestCase):
           options=options,
           use_tpu=False)
 
-    checkpoint_path_0 = os.path.join(FLAGS.test_tmpdir, "0/model.ckpt-0")
-    checkpoint_path_1 = os.path.join(FLAGS.test_tmpdir, "1/model.ckpt-0")
+    checkpoint_path_0 = os.path.join(work_dir, "0/model.ckpt-0")
+    checkpoint_path_1 = os.path.join(work_dir, "1/model.ckpt-0")
     checkpoint_reader_0 = tf.train.load_checkpoint(checkpoint_path_0)
     checkpoint_reader_1 = tf.train.load_checkpoint(checkpoint_path_1)
     for name, _ in tf.train.list_variables(checkpoint_path_0):
@@ -110,7 +85,8 @@ class RunnerLibTest(parameterized.TestCase, tf.test.TestCase):
       t0 = checkpoint_reader_0.get_tensor(name)
       t1 = checkpoint_reader_1.get_tensor(name)
       zero_initialized_vars = [
-          "bias", "biases", "beta", "moving_mean", "global_step"
+          "bias", "biases", "beta", "moving_mean", "global_step",
+          "global_step_disc"
       ]
       one_initialized_vars = ["gamma", "moving_variance"]
       if any(name.endswith(e) for e in zero_initialized_vars):
@@ -146,10 +122,9 @@ class RunnerLibTest(parameterized.TestCase, tf.test.TestCase):
         "training_steps": 3,
         "z_dim": 128,
     }
+    work_dir = self._get_empty_model_dir()
     for i in range(2):
-      model_dir = os.path.join(FLAGS.test_tmpdir, str(i))
-      if tf.gfile.Exists(model_dir):
-        tf.gfile.DeleteRecursively(model_dir)
+      model_dir = os.path.join(work_dir, str(i))
       run_config = tf.contrib.tpu.RunConfig(
           model_dir=model_dir, tf_random_seed=3)
       task_manager = runner_lib.TaskManager(model_dir)
@@ -161,8 +136,8 @@ class RunnerLibTest(parameterized.TestCase, tf.test.TestCase):
           use_tpu=False,
           num_eval_averaging_runs=1)
 
-    checkpoint_path_0 = os.path.join(FLAGS.test_tmpdir, "0/model.ckpt-3")
-    checkpoint_path_1 = os.path.join(FLAGS.test_tmpdir, "1/model.ckpt-3")
+    checkpoint_path_0 = os.path.join(work_dir, "0/model.ckpt-3")
+    checkpoint_path_1 = os.path.join(work_dir, "1/model.ckpt-3")
     checkpoint_reader_0 = tf.train.load_checkpoint(checkpoint_path_0)
     checkpoint_reader_1 = tf.train.load_checkpoint(checkpoint_path_1)
     for name, _ in tf.train.list_variables(checkpoint_path_0):
@@ -186,9 +161,7 @@ class RunnerLibTest(parameterized.TestCase, tf.test.TestCase):
         "training_steps": 1,
         "z_dim": 128,
     }
-    model_dir = FLAGS.test_tmpdir
-    if tf.gfile.Exists(model_dir):
-      tf.gfile.DeleteRecursively(model_dir)
+    model_dir = self._get_empty_model_dir()
     run_config = tf.contrib.tpu.RunConfig(
         model_dir=model_dir,
         tpu_config=tf.contrib.tpu.TPUConfig(iterations_per_loop=1))
@@ -221,9 +194,7 @@ class RunnerLibTest(parameterized.TestCase, tf.test.TestCase):
         "training_steps": 1,
         "z_dim": 128,
     }
-    model_dir = FLAGS.test_tmpdir
-    if tf.gfile.Exists(model_dir):
-      tf.gfile.DeleteRecursively(model_dir)
+    model_dir = self._get_empty_model_dir()
     run_config = tf.contrib.tpu.RunConfig(
         model_dir=model_dir,
         tpu_config=tf.contrib.tpu.TPUConfig(iterations_per_loop=1))
@@ -256,9 +227,7 @@ class RunnerLibTest(parameterized.TestCase, tf.test.TestCase):
         "training_steps": 1,
         "z_dim": 128,
     }
-    model_dir = FLAGS.test_tmpdir
-    if tf.gfile.Exists(model_dir):
-      tf.gfile.DeleteRecursively(model_dir)
+    model_dir = self._get_empty_model_dir()
     run_config = tf.contrib.tpu.RunConfig(
         model_dir=model_dir,
         tpu_config=tf.contrib.tpu.TPUConfig(iterations_per_loop=1))

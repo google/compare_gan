@@ -26,9 +26,27 @@ import six
 import tensorflow as tf
 
 
-@gin.configurable("G", blacklist=["name", "image_shape"])
 @six.add_metaclass(abc.ABCMeta)
-class AbstractGenerator(object):
+class _Module(object):
+  """Base class for architectures.
+
+  Long term this will be replaced by `tf.Module` in TF 2.0.
+  """
+
+  def __init__(self, name):
+    self._name = name
+
+  @property
+  def name(self):
+    return self._name
+
+  @property
+  def trainable_variables(self):
+    return [var for var in tf.trainable_variables() if self._name in var.name]
+
+
+@gin.configurable("G", blacklist=["name", "image_shape"])
+class AbstractGenerator(_Module):
   """Interface for generator architectures."""
 
   def __init__(self,
@@ -44,13 +62,14 @@ class AbstractGenerator(object):
       batch_norm_fn: Function for batch normalization or None.
       spectral_norm: If True use spectral normalization for all weights.
     """
+    super(AbstractGenerator, self).__init__(name=name)
     self._name = name
     self._image_shape = image_shape
     self._batch_norm_fn = batch_norm_fn
     self._spectral_norm = spectral_norm
 
   def __call__(self, z, y, is_training, reuse=tf.AUTO_REUSE):
-    with tf.variable_scope(self._name, values=[z, y], reuse=reuse):
+    with tf.variable_scope(self.name, values=[z, y], reuse=reuse):
       outputs = self.apply(z=z, y=y, is_training=is_training)
     return outputs
 
@@ -80,8 +99,7 @@ class AbstractGenerator(object):
 
 
 @gin.configurable("D", blacklist=["name"])
-@six.add_metaclass(abc.ABCMeta)
-class AbstractDiscriminator(object):
+class AbstractDiscriminator(_Module):
   """Interface for discriminator architectures."""
 
   def __init__(self,
@@ -89,13 +107,14 @@ class AbstractDiscriminator(object):
                batch_norm_fn=None,
                layer_norm=False,
                spectral_norm=False):
+    super(AbstractDiscriminator, self).__init__(name=name)
     self._name = name
     self._batch_norm_fn = batch_norm_fn
     self._layer_norm = layer_norm
     self._spectral_norm = spectral_norm
 
   def __call__(self, x, y, is_training, reuse=tf.AUTO_REUSE):
-    with tf.variable_scope(self._name, values=[x, y], reuse=reuse):
+    with tf.variable_scope(self.name, values=[x, y], reuse=reuse):
       outputs = self.apply(x=x, y=y, is_training=is_training)
     return outputs
 

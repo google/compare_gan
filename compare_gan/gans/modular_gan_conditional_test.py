@@ -19,11 +19,10 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import os
-
 from absl import flags
 from absl.testing import parameterized
 from compare_gan import datasets
+from compare_gan import test_utils
 from compare_gan.gans import consts as c
 from compare_gan.gans import loss_lib
 from compare_gan.gans import penalty_lib
@@ -33,21 +32,15 @@ import tensorflow as tf
 
 
 FLAGS = flags.FLAGS
-TEST_ARCHITECTURES = [c.RESNET_CIFAR, c.RESNET5_ARCH, c.RESNET5_BIGGAN_ARCH]
+TEST_ARCHITECTURES = [c.RESNET5_ARCH, c.RESNET_BIGGAN_ARCH, c.RESNET_CIFAR_ARCH]
 TEST_LOSSES = [loss_lib.non_saturating, loss_lib.wasserstein,
                loss_lib.least_squares, loss_lib.hinge]
 TEST_PENALTIES = [penalty_lib.no_penalty, penalty_lib.dragan_penalty,
                   penalty_lib.wgangp_penalty, penalty_lib.l2_penalty]
 
 
-class ModularGANConditionalTest(parameterized.TestCase, tf.test.TestCase):
-
-  def setUp(self):
-    super(ModularGANConditionalTest, self).setUp()
-    FLAGS.data_fake_dataset = True
-    self.model_dir = os.path.join(FLAGS.test_tmpdir, "model_dir")
-    if tf.gfile.Exists(self.model_dir):
-      tf.gfile.DeleteRecursively(self.model_dir)
+class ModularGANConditionalTest(parameterized.TestCase,
+                                test_utils.CompareGanTestCase):
 
   def _runSingleTrainingStep(self, architecture, loss_fn, penalty_fn,
                              labeled_dataset):
@@ -59,15 +52,16 @@ class ModularGANConditionalTest(parameterized.TestCase, tf.test.TestCase):
     with gin.unlock_config():
       gin.bind_parameter("penalty.fn", penalty_fn)
       gin.bind_parameter("loss.fn", loss_fn)
+    model_dir = self._get_empty_model_dir()
     run_config = tf.contrib.tpu.RunConfig(
-        model_dir=self.model_dir,
+        model_dir=model_dir,
         tpu_config=tf.contrib.tpu.TPUConfig(iterations_per_loop=1))
     dataset = datasets.get_dataset("cifar10")
     gan = ModularGAN(
         dataset=dataset,
         parameters=parameters,
         conditional=True,
-        model_dir=self.model_dir)
+        model_dir=model_dir)
     estimator = gan.as_estimator(run_config, batch_size=2, use_tpu=False)
     estimator.train(gan.input_fn, steps=1)
 
@@ -78,17 +72,17 @@ class ModularGANConditionalTest(parameterized.TestCase, tf.test.TestCase):
 
   @parameterized.parameters(TEST_LOSSES)
   def testSingleTrainingStepLosses(self, loss_fn):
-    self._runSingleTrainingStep(c.RESNET_CIFAR, loss_fn, penalty_lib.no_penalty,
-                                True)
+    self._runSingleTrainingStep(c.RESNET_CIFAR_ARCH, loss_fn,
+                                penalty_lib.no_penalty, labeled_dataset=True)
 
   @parameterized.parameters(TEST_PENALTIES)
   def testSingleTrainingStepPenalties(self, penalty_fn):
-    self._runSingleTrainingStep(c.RESNET_CIFAR, loss_lib.hinge, penalty_fn,
-                                True)
+    self._runSingleTrainingStep(c.RESNET_CIFAR_ARCH, loss_lib.hinge, penalty_fn,
+                                labeled_dataset=True)
 
   def testUnlabledDatasetRaisesError(self):
     parameters = {
-        "architecture": c.RESNET_CIFAR,
+        "architecture": c.RESNET_CIFAR_ARCH,
         "lambda": 1,
         "z_dim": 120,
     }
@@ -96,12 +90,13 @@ class ModularGANConditionalTest(parameterized.TestCase, tf.test.TestCase):
       gin.bind_parameter("loss.fn", loss_lib.hinge)
     # Use dataset without labels.
     dataset = datasets.get_dataset("celeb_a")
+    model_dir = self._get_empty_model_dir()
     with self.assertRaises(ValueError):
       gan = ModularGAN(
           dataset=dataset,
           parameters=parameters,
           conditional=True,
-          model_dir=self.model_dir)
+          model_dir=model_dir)
       del gan
 
 

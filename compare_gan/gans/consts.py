@@ -25,37 +25,16 @@ TRUNCATED_INIT = "truncated"
 ORTHOGONAL_INIT = "orthogonal"
 INITIALIZERS = [NORMAL_INIT, TRUNCATED_INIT, ORTHOGONAL_INIT]
 
-NO_NORMALIZATION = "none"
-BATCH_NORM = "batch_norm"
-LAYER_NORM = "layer_norm"
-SPECTRAL_NORM = "spectral_norm"
-WEIGHT_NORM = "weight_norm"
-NORMALIZERS = [NO_NORMALIZATION, BATCH_NORM, LAYER_NORM,
-               SPECTRAL_NORM, WEIGHT_NORM]
-
-INFOGAN_ARCH = "infogan_arch"
 DCGAN_ARCH = "dcgan_arch"
+DUMMY_ARCH = "dummy_arch"
+INFOGAN_ARCH = "infogan_arch"
 RESNET5_ARCH = "resnet5_arch"
-RESNET5_BIGGAN_ARCH = "resnet5_biggan_arch"
-SNDCGAN_ARCH = "sndcgan_arch"
-RESNET_CIFAR = "resnet_cifar_arch"
-RESNET_STL = "resnet_stl_arch"
 RESNET30_ARCH = "resnet30_arch"
-RESNET5_ABLATION = "resnet5_ablation"  # Only to compare changes in Resnet.
-ARCHITECTURES = [INFOGAN_ARCH, DCGAN_ARCH, RESNET_CIFAR, SNDCGAN_ARCH,
-                 RESNET5_ARCH, RESNET5_BIGGAN_ARCH, RESNET30_ARCH, RESNET_STL,
-                 RESNET5_ABLATION]
-
-# This will be used when checking that the regularization was applied
-# on a correct number of layers. Currently used only for L2 regularization in
-# penalty_lib.
-N_DISCRIMINATOR_LAYERS = {
-    INFOGAN_ARCH: 4,
-    DCGAN_ARCH: 5,
-    SNDCGAN_ARCH: 8,
-    RESNET_CIFAR: 13,
-    RESNET5_ARCH: 19,
-    RESNET5_BIGGAN_ARCH: 19,
-    RESNET30_ARCH: 107,
-    RESNET5_ABLATION: 19,
-}
+RESNET_BIGGAN_ARCH = "resnet_biggan_arch"
+RESNET_BIGGAN_DEEP_ARCH = "resnet_biggan_deep_arch"
+RESNET_CIFAR_ARCH = "resnet_cifar_arch"
+RESNET_STL_ARCH = "resnet_stl_arch"
+SNDCGAN_ARCH = "sndcgan_arch"
+ARCHITECTURES = [INFOGAN_ARCH, DCGAN_ARCH, RESNET5_ARCH, RESNET30_ARCH,
+                 RESNET_BIGGAN_ARCH, RESNET_BIGGAN_DEEP_ARCH, RESNET_CIFAR_ARCH,
+                 RESNET_STL_ARCH, SNDCGAN_ARCH]
