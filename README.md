@@ -23,9 +23,10 @@ including:
 
 2.  [The GAN Landscape: Losses, Architectures, Regularization, and Normalization](https://arxiv.org/abs/1807.04720)
     [<font color="green">[Code]</font>](https://github.com/google/compare_gan/tree/v2)
+    [<font color="green">[Colab]</font>](https://colab.research.google.com/github/google/compare_gan/blob/v2/compare_gan/src/tfhub_models.ipynb)
     \
     Karol Kurach*, Mario Lucic*, Xiaohua Zhai, Marcin Michalski, Sylvain Gelly
-    **[2018]**
+    **[ICML 2019]**
 
 3.  [Assessing Generative Models via Precision and Recall](https://arxiv.org/abs/1806.00035)
     [<font color="green">[Code]</font>](https://github.com/google/compare_gan/blob/560697ee213f91048c6b4231ab79fcdd9bf20381/compare_gan/src/prd_score.py)
@@ -47,15 +48,18 @@ including:
     [<font color="green">[Code]</font>](https://github.com/google/compare_gan) \
     Ting Chen, Mario Lucic, Neil Houlsby, Sylvain Gelly **[ICLR 2019]**
 
-7.  [Self-Supervised Generative Adversarial Networks](https://arxiv.org/abs/1811.11212)
+7.  [Self-Supervised GANs via Auxiliary Rotation Loss](https://arxiv.org/abs/1811.11212)
     [<font color="green">[Code]</font>](https://github.com/google/compare_gan) \
     Ting Chen, Xiaohua Zhai, Marvin Ritter, Mario Lucic, Neil Houlsby **[CVPR
     2019]**
 
 8.  [High-Fidelity Image Generation With Fewer Labels](https://arxiv.org/abs/1903.02271)
-    [<font color="green">[Code]</font>](https://github.com/google/compare_gan) \
+    [<font color="green">[Code]</font>](https://github.com/google/compare_gan)
+    [<font color="green">[Blog Post]</font>](https://ai.googleblog.com/2019/03/reducing-need-for-labeled-data-in.html)
+    [<font color="green">[Colab]</font>](https://colab.research.google.com/github/google/compare_gan/blob/v3/colabs/s3gan_demo.ipynb)
+    \
     Mario Lucic*, Michael Tschannen*, Marvin Ritter*, Xiaohua Zhai, Olivier
-    Bachem, Sylvain Gelly **[2019]**
+    Bachem, Sylvain Gelly **[ICML 2019]**
 
 ## Installation
 
