@@ -49,7 +49,9 @@ including:
     Ting Chen, Mario Lucic, Neil Houlsby, Sylvain Gelly **[ICLR 2019]**
 
 7.  [Self-Supervised GANs via Auxiliary Rotation Loss](https://arxiv.org/abs/1811.11212)
-    [<font color="green">[Code]</font>](https://github.com/google/compare_gan) \
+    [<font color="green">[Code]</font>](https://github.com/google/compare_gan)
+    [<font color="green">[Colab]</font>](https://colab.research.google.com/github/google/compare_gan/blob/v3/colabs/ssgan_demo.ipynb)
+    \
     Ting Chen, Xiaohua Zhai, Marvin Ritter, Mario Lucic, Neil Houlsby **[CVPR
     2019]**
 
