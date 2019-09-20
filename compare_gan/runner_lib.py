@@ -28,6 +28,7 @@ from absl import flags
 from absl import logging
 from compare_gan import datasets
 from compare_gan import eval_gan_lib
+from compare_gan.eval_utils import NanFoundError, DatasetOutOfRangeError
 from compare_gan import hooks
 from compare_gan.gans import utils
 from compare_gan.metrics import fid_score as fid_score_lib
@@ -267,10 +268,13 @@ def _run_eval(module_spec, checkpoints, task_manager, run_config,
       result_dict = eval_gan_lib.evaluate_tfhub_module(
           export_path, eval_tasks, use_tpu=use_tpu,
           num_averaging_runs=num_averaging_runs)
-    except ValueError as nan_found_error:
+    except NanFoundError as nan_found_error:
       result_dict = {}
       logging.exception(nan_found_error)
       default_value = eval_gan_lib.NAN_DETECTED
+    except DatasetOutOfRangeError as dataset_out_of_range_error:
+      logging.exception(dataset_out_of_range_error)
+      break
 
     logging.info("Evaluation result for checkpoint %s: %s (default value: %s)",
                  checkpoint_path, result_dict, default_value)

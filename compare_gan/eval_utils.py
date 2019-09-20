@@ -53,6 +53,10 @@ class NanFoundError(Exception):
   """Exception thrown, when the Nans are present in the output."""
 
 
+class DatasetOutOfRangeError(Exception):
+  """Exception thrown, when the dataset has not enough samples."""
+
+
 class EvalDataSample(object):
   """Helper class to hold images and Inception features for evaluation.
 
@@ -127,11 +131,12 @@ def get_real_images(dataset,
           real_images[i] = b
         except tf.errors.OutOfRangeError:
           logging.error("Reached the end of dataset. Read: %d samples.", i)
+          real_images = real_images[:i]
           break
 
   if real_images.shape[0] != num_examples:
     if failure_on_insufficient_examples:
-      raise ValueError("Not enough examples in the dataset %s: %d / %d" %
+      raise DatasetOutOfRangeError("Not enough examples in the dataset %s: %d / %d" %
                        (dataset, real_images.shape[0], num_examples))
     else:
       logging.error("Not enough examples in the dataset %s: %d / %d", dataset,
