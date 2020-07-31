@@ -39,10 +39,10 @@ including:
     \
     Alexander A. Alemi, Ian Fischer **[NeurIPS 2018]**
 
-5.  [A Case for Object Compositionality in Deep Generative Models of Images](https://arxiv.org/abs/1810.10340)
+5.  [Investigating Object Compositionality in Generative Adversarial Networks](https://arxiv.org/abs/1810.10340)
     [<font color="green">[Code]</font>](https://github.com/google/compare_gan/tree/v2_multigan)
     \
-    Sjoerd van Steenkiste, Karol Kurach, Sylvain Gelly **[2018]**
+    Sjoerd van Steenkiste, Karol Kurach, Jürgen Schmidhuber, Sylvain Gelly **[Neural Networks 2020]**
 
 6.  [On Self Modulation for Generative Adversarial Networks](https://arxiv.org/abs/1810.01365)
     [<font color="green">[Code]</font>](https://github.com/google/compare_gan) \
